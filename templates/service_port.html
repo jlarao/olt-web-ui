@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Panel de control</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+</head>
+<body class="bg-light">
+    <h2>Service Ports Configurados</h2>
+<table>
+    <thead>
+        <tr>
+            <th>Comando</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for sp in service_ports %}
+        <tr><td><code>{{ sp }}</code></td></tr>
+        {% endfor %}
+        {% if service_ports|length == 0 %}
+        <tr><td><em>No se encontraron service-port.</em></td></tr>
+        {% endif %}
+    </tbody>
+</table>
+</body>
+</html>

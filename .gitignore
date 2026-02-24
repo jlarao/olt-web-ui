@@ -1,0 +1,25 @@
+# Secrets & credentials
+.env
+pass.txt
+
+# SSL certificates
+*.pem
+
+# Databases
+*.db
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs
+*.log
+
+# Virtual environment
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/

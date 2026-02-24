@@ -1,0 +1,8 @@
+Flask
+Flask-Login
+python-dotenv
+Werkzeug
+requests
+gspread
+oauth2client
+routeros_api
