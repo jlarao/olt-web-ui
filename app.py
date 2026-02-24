@@ -3,12 +3,63 @@ from flask_login import LoginManager, login_user, login_required, logout_user, U
 from werkzeug.security import check_password_hash
 import sqlite3,time
 import os
+import sys
+import logging
+from logging.handlers import RotatingFileHandler
 import json
 from dotenv import load_dotenv
-from olt_telnet import alta_ont, consultar_potencia, descargar_config, guardar_sqlite, conectar, obtener_ultimo_config, parse_ont_info, limpiar_salida_olt, extraer_service_ports, delete_sp, delete_ont_cont, guardar_tabla, get_potencia, alta_ont_versiontwo, delete_ont_sn, alta_ont_version_three, send_cmd_telnet_add_onu_two
 from datetime import datetime
 import re
 load_dotenv()
+
+# --- Configuracion de logging ---
+LOG_FILE = os.getenv("LOG_FILE", "app.log")
+LOG_LEVEL = os.getenv("LOG_LEVEL", "DEBUG")
+
+logger = logging.getLogger()
+logger.setLevel(getattr(logging, LOG_LEVEL, logging.DEBUG))
+
+# Formato del log
+formatter = logging.Formatter(
+    "[%(asctime)s] %(levelname)s in %(module)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
+
+# Handler archivo con rotacion (5 MB max, 5 archivos de respaldo)
+file_handler = RotatingFileHandler(LOG_FILE, maxBytes=5*1024*1024, backupCount=5, encoding="utf-8")
+file_handler.setLevel(logging.DEBUG)
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+
+# Handler consola (para cuando se ejecuta manualmente)
+console_handler = logging.StreamHandler(sys.stdout)
+console_handler.setLevel(logging.DEBUG)
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
+
+# Redirigir print() y errores al log
+class LogStream:
+    def __init__(self, log_func):
+        self.log_func = log_func
+        self.buffer = ""
+    def write(self, msg):
+        if msg and msg.strip():
+            self.log_func(msg.rstrip())
+    def flush(self):
+        pass
+
+# Configurar loggers para stdout/stderr con los mismos handlers
+for name in ("stdout", "stderr"):
+    sub_logger = logging.getLogger(name)
+    sub_logger.setLevel(logging.DEBUG)
+    sub_logger.addHandler(file_handler)
+    sub_logger.addHandler(console_handler)
+    sub_logger.propagate = False
+
+sys.stdout = LogStream(logging.getLogger("stdout").info)
+sys.stderr = LogStream(logging.getLogger("stderr").error)
+
+from olt_telnet import alta_ont, consultar_potencia, descargar_config, guardar_sqlite, conectar, obtener_ultimo_config, parse_ont_info, limpiar_salida_olt, extraer_service_ports, delete_sp, delete_ont_cont, guardar_tabla, get_potencia, alta_ont_versiontwo, delete_ont_sn, alta_ont_version_three, send_cmd_telnet_add_onu_two
 
 LINE_PROFILE = os.getenv("LINE_PROFILE_ID", "500")
 SRV_PROFILE = os.getenv("SRV_PROFILE_ID", "500")
@@ -20,7 +71,7 @@ HOST_MKT = os.getenv("HOST_MKT", "LOCALHOST")
 USERNAME_MKT = os.getenv("USERNAME_MKT", "admin")
 PASSWORD_MKT =  os.getenv("PASSWORD_MKT", "admin")
 SERVER_ACS = os.getenv("SERVER_ACS", "192.168.1.7:7557")
-
+PWD_INSERT_OLT = os.getenv("PWD_INSERT_OLT", "")
 
 # Cargar variables del archivo .env
 load_dotenv()
@@ -336,6 +387,15 @@ def verificar_sp(sp):
     existe = c.fetchone() is not None
     conn.close()
     return jsonify({"existe": existe})
+
+@app.route("/verificar_pwd", methods=["POST"])
+def verificar_pwd():
+    pwd = request.json.get("pwd", "")
+    if not PWD_INSERT_OLT:
+        return jsonify({"ok": False, "msg": "Password no configurado en el servidor"})
+    if pwd == PWD_INSERT_OLT:
+        return jsonify({"ok": True})
+    return jsonify({"ok": False, "msg": "Password incorrecto"})
 
 @app.route("/borrar_ont_sn/<sn>")
 # @login_required

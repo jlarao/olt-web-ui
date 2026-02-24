@@ -142,6 +142,18 @@
             <label class="form-label">VLAN</label>
             <input type="text" name="vlan" class="form-control" required>
         </div> -->
+            <div class="container">
+                <div class="row align-items-start">
+                    <div class="col-4">
+                        <div class="mb-3">
+                            <label class="form-label">Password de autorizacion</label>
+                            <input type="password" id="pwd_insert" class="form-control" placeholder="Ingrese password" required>
+                            <span id="mensaje-pwd" style="color:red;"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <div id="mensaje-error-global" style="color: red;"></div>
 
             <button class="btn btn-success">Dar de alta ONT</button>
@@ -266,6 +278,12 @@
                 return;
             }
 
+            // Verificar password de autorizacion
+            const pwdValido = await verificar_pwd();
+            if (!pwdValido) {
+                return;
+            }
+
             // Ejecutar validaciones asincrónicas
             const snValido = await verificar_sn_dos();
             const spValido = await verificar_sp_dos();
@@ -304,6 +322,39 @@
             } catch (error) {
                 console.error("Error al verificar SN:", error);
                 mensaje.textContent = "Error al verificar SN.";
+                return false;
+            }
+        }
+
+        async function verificar_pwd() {
+            const pwd = document.getElementById("pwd_insert").value.trim();
+            const mensaje = document.getElementById("mensaje-pwd");
+            const errorDiv = document.getElementById("mensaje-error-global");
+
+            if (pwd === "") {
+                mensaje.textContent = "El password no puede estar vacio.";
+                return false;
+            }
+
+            try {
+                const response = await fetch("/verificar_pwd", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ pwd: pwd })
+                });
+                const data = await response.json();
+
+                if (data.ok) {
+                    mensaje.textContent = "";
+                    return true;
+                } else {
+                    mensaje.textContent = data.msg || "Password incorrecto.";
+                    errorDiv.textContent = "Password incorrecto.";
+                    return false;
+                }
+            } catch (error) {
+                console.error("Error al verificar password:", error);
+                mensaje.textContent = "Error al verificar password.";
                 return false;
             }
         }
