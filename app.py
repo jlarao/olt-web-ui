@@ -59,6 +59,9 @@ for name in ("stdout", "stderr"):
 sys.stdout = LogStream(logging.getLogger("stdout").info)
 sys.stderr = LogStream(logging.getLogger("stderr").error)
 
+# Silenciar warnings internos de Werkzeug/Flask
+logging.getLogger("werkzeug").setLevel(logging.ERROR)
+
 from olt_telnet import alta_ont, consultar_potencia, descargar_config, guardar_sqlite, conectar, obtener_ultimo_config, parse_ont_info, limpiar_salida_olt, extraer_service_ports, delete_sp, delete_ont_cont, guardar_tabla, get_potencia, alta_ont_versiontwo, delete_ont_sn, alta_ont_version_three, send_cmd_telnet_add_onu_two
 
 LINE_PROFILE = os.getenv("LINE_PROFILE_ID", "500")
