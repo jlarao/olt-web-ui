@@ -880,4 +880,4 @@ def getpotencia():
     # return result
     return render_template("get_potencia.html", records = r_onts)
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080, ssl_context=("fullchain.pem","privkey.pem"),debug=True)
+    app.run(host="0.0.0.0", port=8080, ssl_context=("fullchain.pem","privkey.pem"),debug=False)
