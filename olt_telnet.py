@@ -29,9 +29,17 @@ GEMPORT_TR = os.getenv("GEMPORT_TR", "1")
 GEMPORT_INT = os.getenv("GEMPORT_INT", "2")
 VLAN_TR = os.getenv("VLAN_TR", "99")
 VLAN_INT = os.getenv("VLAN_INT", "100")
+VLAN_TR_MA = os.getenv("VLAN_TR_MA", "101")
+VLAN_INT_MA = os.getenv("VLAN_INT_MA", "102")
 
 LINE_PROFILE_TRANSPARENT = os.getenv("LINE_PROFILE_TRANSPARENT", "500")
 SRV_PROFILE_TRANSPARENT = os.getenv("SRV_PROFILE_TRANSPARENT", "500")
+
+OLT_IP_MA   = os.getenv("OLT_IP_MA")
+OLT_PORT_MA = os.getenv("OLT_PORT_MA", "23")
+OLT_USER_MA = os.getenv("OLT_USER_MA")
+OLT_PASS_MA = os.getenv("OLT_PASS_MA")
+
 def conectar():
     try:
         print("Conectando al servidor...")
@@ -69,6 +77,45 @@ def conectar():
         elif ">" in decoded:
             # return "ok", decoded
             return tn, "exito", "login correcto." 
+        else:
+            return tn, "error", "No se detectó el prompt esperado."
+
+    except Exception as e:
+        return tn, "error", f"Excepción durante login: {e}"
+
+def conectar_ma():
+    try:
+        print("Conectando al servidor MA...")
+        print(OLT_IP_MA)
+        print(OLT_PORT_MA)
+        tn = telnetlib.Telnet(OLT_IP_MA, OLT_PORT_MA, timeout=10)
+        output = tn.read_until(b">>User name:", timeout=5).decode("ascii", errors="ignore")
+        print("Servidor pide usuario.")
+        if "reenter" in output.lower():
+            return tn, "error", output
+
+        tn.write(OLT_USER_MA.encode("ascii") + b"\r\n")
+        time.sleep(1)
+
+        output = tn.read_until(b">>User password:", timeout=5).decode("ascii", errors="ignore")
+        print("Servidor pide contraseña.")
+        if "reenter" in output.lower():
+            return tn, "error", output
+
+        tn.write(OLT_PASS_MA.encode("ascii") + b"\r\n")
+        time.sleep(2)
+
+        post_login = tn.read_very_eager()
+        decoded = post_login.decode("ascii", errors="ignore")
+        print("Respuesta post-login:")
+        print(decoded)
+
+        if "incorrect" in decoded.lower():
+            return tn, "error", "Contraseña incorrecta."
+        elif "reenter" in decoded.lower():
+            return tn, "error", f"Demasiados intentos fallidos. {decoded}"
+        elif ">" in decoded:
+            return tn, "exito", "login correcto."
         else:
             return tn, "error", "No se detectó el prompt esperado."
 
@@ -1533,6 +1580,118 @@ def alta_ont_version_three(frame, slot, port, ontid, sn, desc, service_port):
         traceback.print_exc()
         tn.close()
         return f"Error al dar de alta ONT: {e} {estado} {resultado}"
+
+def alta_ont_version_three_ma(frame, slot, port, ontid, sn, desc, service_port):
+    try:
+        tipo = 'alta_onu_version_three_ma'
+        PATRON_CR = re.compile(r"{\s*<cr>.*?}", re.IGNORECASE)
+
+        tn, estado, resultado = conectar_ma()
+        print(estado)
+        if estado == "error":
+            print("Error ")
+            return redirect(url_for("dashboard"))
+        else:
+            tn.write(b"enable\n")
+            tn.write(b"config\n")
+            print("config")
+            if isinstance(tn, str):
+                return tn
+
+            interface_cmd = f"interface gpon {frame}/{slot}\n"
+
+            add_ont_cmd = (
+                f'ont add {port} {ontid} sn-auth "{sn}" omci '
+                f'ont-lineprofile-id {LINE_PROFILE_V2} ont-srvprofile-id {SRV_PROFILE_V2} '
+                f'desc "{desc}"'
+            )
+
+            add_ont_cmd_two = (
+                f'ont ipconfig {port} {ontid} dhcp'
+                f' vlan {VLAN_TR_MA} priority 5'
+            )
+
+            add_ont_cmd_three = (
+                f'ont tr069-server-config {port} {ontid} profile-id 1'
+            )
+
+            service_cmd = (
+                f'service-port {service_port} vlan {VLAN_INT_MA}  '
+                f'gpon {frame}/{slot}/{port} ont {ontid} '
+                f'gemport {GEMPORT_INT} multi-service user-vlan {VLAN_INT_MA} tag-transform translate'
+            )
+            service_port_two = int(service_port) + 1
+            service_cmd_two = (
+                f'service-port {service_port_two} vlan {VLAN_TR_MA} gpon {frame}/{slot}/{port} ont {ontid} '
+                f'gemport {GEMPORT_TR} multi-service user-vlan {VLAN_TR_MA} tag-transform translate'
+            )
+
+            tn.write(interface_cmd.encode("ascii"))
+            time.sleep(0.3)
+
+            print("ADD ONT command----------------------------------------------------:", add_ont_cmd)
+            result, out = send_cmd_telnet_add_onu(tn, add_ont_cmd)
+            if result == False:
+                print("-----------------------------------------------existe " + out)
+                return tn, out
+            else:
+                r2, out2 = send_cmd_telnet_add_onu_two(tn, add_ont_cmd_two)
+                if r2 == False:
+                    print("-----------------------------------------------existe " + out2)
+                    return tn, out2
+                else:
+                    r3, out3 = send_cmd_telnet_add_onu_two(tn, add_ont_cmd_three)
+                    if r3 == False:
+                        print("-----------------------------------------------existe " + out3)
+                        return tn, out3
+                    else:
+                        cmd = f"quit\r\n"
+                        r4, out4 = send_cmd_telnet_add_onu_two(tn, cmd)
+                        if r4 == False:
+                            print("-----------------------------------------------existe " + out4)
+                            return tn, out4
+                        else:
+                            insert_onu_table(frame, slot, port, ontid, sn, desc)
+                            print("OLT espera ENTER, enviando...")
+                            cmd = (" ")
+                            r4, out4 = send_cmd_telnet_add_onu_two(tn, cmd)
+                            if r4 == False:
+                                print("-----------------------------------------------existe " + out4)
+                                return tn, out4
+                            else:
+                                r5, out5 = send_cmd_telnet_add_onu_two(tn, service_cmd)
+                                if r5 == False:
+                                    print("-----------------------------------------------existe " + out5)
+                                    return tn, out5
+                                else:
+                                    cmd = (" ")
+                                    r6, out6 = send_cmd_telnet_add_onu_two(tn, cmd)
+                                    if r6 == False:
+                                        print("-----------------------------------------------existe " + out6)
+                                        return tn, out6
+                                    else:
+                                        insert_service_table(service_port, VLAN_INT_MA, frame, slot, port, ontid, service_cmd)
+                                        r7, out7 = send_cmd_telnet_add_onu_two(tn, service_cmd_two)
+                                        if r7 == False:
+                                            print("-----------------------------------------------existe " + out7)
+                                            return tn, out7
+                                        else:
+                                            cmd = (" ")
+                                            r8, out8 = send_cmd_telnet_add_onu_two(tn, cmd)
+                                            if r8 == False:
+                                                print("-----------------------------------------------existe " + out8)
+                                                return tn, out8
+                                            else:
+                                                insert_service_table(service_port_two, VLAN_TR_MA, frame, slot, port, ontid, service_cmd_two)
+                                                return tn, out8
+
+            return
+
+    except Exception as e:
+        print("Error:", e)
+        traceback.print_exc()
+        tn.close()
+        return f"Error al dar de alta ONT MA: {e} {estado} {resultado}"
 
 def insert_onu_table(card_id, slot_id, port_id, ont_id,  sn, description):
     # //sqlite3

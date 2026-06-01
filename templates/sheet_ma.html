@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Resultado MA</title>
+
+        <link rel="stylesheet" href="{{ url_for('static', filename='css/bootstrap.css') }}">
+        <script src="{{ url_for('static', filename='js/jquery.min.js') }}"></script>
+        <script src="{{ url_for('static', filename='js/jquery.tablesorter.min.js') }}"></script>
+        <script src="{{ url_for('static', filename='js/jquery.tablesorter.widgets.min.js') }}"></script>
+        <script src="{{ url_for('static', filename='js/jquery.tablesorter.pager.min.js') }}"></script>
+        <script src="{{ url_for('static', filename='js/tablesort.js') }}"></script>
+        <script src="{{ url_for('static', filename='js/popper.min.js') }}"></script>
+        <script src="{{ url_for('static', filename='js/bootstrap.min.js') }}"></script>
+    <style>
+        pre {
+            background-color: #f8f9fa;
+            padding: 1rem;
+            border-radius: 4px;
+            font-family: monospace;
+        }
+    </style>
+    <style>
+        table { border-collapse: collapse; width: 100%; }
+        th, td { padding: 6px; border: 1px solid #ccc; }
+        th { background-color: #f2f2f2; }
+        h2 { margin-top: 30px; }
+    </style>
+</head>
+<body class="bg-light">
+    <h1>ONTs por Puerto — MA</h1>
+    <a href="/dashboard">Dashboard</a>
+
+    <h2>Puerto </h2>
+    <table id="tablesorting-sheet" class="display">
+        <thead>
+            <th>Service</th>
+            <th>Name</th>
+            <th>SN</th>
+            <th>User</th>
+            <th>Port</th>
+            <th>ONT</th>
+            <th>Service Port</th>
+            <th>Link</th>
+        </thead>
+        <tbody>
+            {% for item in records %}
+            <tr>
+                <td>{{ item.service }}</td>
+                <td>{{ item.name }}</td>
+                <td>{{ item.sn }}</td>
+                <td>{{ item.user }}</td>
+                <td>{{ item.port }}</td>
+                <td>{{ item.ont }}</td>
+                <td>{{ item['service-port'] }}</td>
+                <td>
+                    <form method="POST" action="/alta-ont-gs-ma">
+                    <input type="hidden" name="name" value="{{ item.name }}">
+                    <input type="hidden" name="sn" value="{{ item.sn }}">
+                    <input type="hidden" name="user" value="{{ item.user }}">
+                    <input type="hidden" name="port" value="{{ item.port }}">
+                    <input type="hidden" name="ont" value="{{ item.ont }}">
+                    <input type="hidden" name="service_port" value="{{ item['service-port'] }}">
+                    <button type="submit">Enviar</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+        <tfoot>
+            <tr>
+                <td colspan="8" class="pager form-horizontal">
+                    <button class="btn first"><i class="fa fa-step-backward"></i></button>
+                    <button class="btn prev"><i class="fa fa-arrow-left"></i></button>
+                    <span class="pagedisplay"></span>
+                    <button class="btn next"><i class="fa fa-arrow-right"></i></button>
+                    <button class="btn last"><i class="fa fa-step-forward"></i></button>
+                    <select class="pagesize input-xs" title="Select page size">
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                        <option value="200">200</option>
+                        <option value="300" selected="selected">300</option>
+                    </select>
+                    <select class="pagenum input-xs" title="Seleccione Página"></select>
+                </td>
+            </tr>
+        </tfoot>
+    </table>
+
+<script>
+   $(document).ready(function() {
+    console.log("ready")
+    $(function() {
+        console.log("ready2")
+        $("#tablesorting-sheet").tablesorter({
+           sortList: [[6,1]]
+        });
+    });
+   });
+</script>
+
+</body>
+</html>

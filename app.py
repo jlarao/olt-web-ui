@@ -62,7 +62,7 @@ sys.stderr = LogStream(logging.getLogger("stderr").error)
 # Silenciar warnings internos de Werkzeug/Flask
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
-from olt_telnet import alta_ont, consultar_potencia, descargar_config, guardar_sqlite, conectar, obtener_ultimo_config, parse_ont_info, limpiar_salida_olt, extraer_service_ports, delete_sp, delete_ont_cont, guardar_tabla, get_potencia, alta_ont_versiontwo, delete_ont_sn, alta_ont_version_three, send_cmd_telnet_add_onu_two
+from olt_telnet import alta_ont, consultar_potencia, descargar_config, guardar_sqlite, conectar, obtener_ultimo_config, parse_ont_info, limpiar_salida_olt, extraer_service_ports, delete_sp, delete_ont_cont, guardar_tabla, get_potencia, alta_ont_versiontwo, delete_ont_sn, alta_ont_version_three, send_cmd_telnet_add_onu_two, alta_ont_version_three_ma, conectar_ma
 
 LINE_PROFILE = os.getenv("LINE_PROFILE_ID", "500")
 SRV_PROFILE = os.getenv("SRV_PROFILE_ID", "500")
@@ -765,6 +765,26 @@ def sheet():
     # dump(sheet)
     # return jsonify({"response": records})
 
+@app.route("/sheet_ma", methods=["GET"])
+def sheet_ma():
+    import gspread
+    from oauth2client.service_account import ServiceAccountCredentials
+
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = ServiceAccountCredentials.from_json_keyfile_name('react-elearning-e12a6-c869ba1c268d.json', scope)
+    client = gspread.authorize(creds)
+
+    sheet = client.open("Ingreso2024").worksheet("cuentas fibra ma")
+
+    records = sheet.get_all_records()
+    recfill = []
+    for record in records:
+        if record['sn'] == '':
+            continue
+        recfill.append(record)
+
+    return render_template("sheet_ma.html", records=recfill)
+
 @app.route("/alta-ont-gs", methods=["POST"])
 # @login_required
 def alta_ont_web_gs():
@@ -781,6 +801,61 @@ def alta_ont_web_gs():
         port =port.split()[1]
 
         return render_template("alta_ont_gs.html", frame =frame , slot =slot, port =port, ontid =ontid, sn =sn, desc =desc, sp =sp, pppoe =pppoe)
+
+@app.route("/alta-ont-gs-ma", methods=["POST"])
+# @login_required
+def alta_ont_web_gs_ma():
+    if request.method == "POST":
+        frame = 0
+        slot = 1
+        port = request.form["port"]
+        ontid = request.form["ont"]
+        sn = request.form["sn"]
+        desc = request.form["name"]
+        sp = request.form["service_port"]
+        pppoe = request.form["user"]
+        port = port.split()[1]
+
+        return render_template("alta_ont_gs_ma.html", frame=frame, slot=slot, port=port, ontid=ontid, sn=sn, desc=desc, sp=sp, pppoe=pppoe)
+
+@app.route("/alta-ont-v3-ma", methods=["POST"])
+# @login_required
+def alta_ont_web_v3_ma():
+    if request.method == "POST":
+        frame = request.form["frame"]
+        slot = request.form["slot"]
+        port = request.form["port"]
+        ontid = request.form["ontid"]
+        sn = request.form["sn"]
+        desc = request.form["desc"]
+        sp = request.form["sp"]
+        pppoe = request.form["pppoe"]
+        profile = request.form["profile"]
+
+        tn, resultado = alta_ont_version_three_ma(frame, slot, port, ontid, sn, desc, sp)
+
+        user = to_camel_case(desc)
+        response = provision_device_dynamic(
+            serial_target=sn,
+            pppoe_user=pppoe,
+            pppoe_pass=PASSWORD_PPPOE,
+            vlan=VLAN,
+            tag=user,
+            provision_name="crear_pppoe_vlan100",
+            host=SERVER_ACS
+        )
+        print("Salida Guardando...")
+
+        time.sleep(10)
+        cmd = f"save\r\n"
+        r, out = send_cmd_telnet_add_onu_two(tn, cmd)
+        time.sleep(0.3)
+        print("Salida final:\n", out)
+        print(repr(out))
+        tn.close()
+
+        call_mkt(pppoe, profile, desc)
+        return render_template("resultado_alta_v2.html", resultado=resultado)
 
 @app.route("/alta-ont-gs-transp", methods=["POST"])
 # @login_required
