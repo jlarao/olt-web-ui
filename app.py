@@ -541,7 +541,9 @@ def provision_device_dynamic(
     tag="AutoProvisioned",
     provision_name="mynewprovision",
     # host="http://localhost:7557"
-    host=SERVER_ACS
+    host=SERVER_ACS,
+    pppoe_user_temp="user_temp",
+    pppoe_pass_temp=pppoe_pass,
     ):
     url = f"{host}/provisions/{provision_name}"
     headers = {
@@ -572,9 +574,29 @@ def provision_device_dynamic(
                 declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.Enable", null, {{value: true}});
                 declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.NATEnabled", null, {{value: true}});
                 declare("Tags.{tag}", null, {{value: true}});
-                
+
             }} catch (err) {{
                 throw new Error("❌ Error al crear instancia WANConnectionDevice: " + err.message);
+            }}
+            }} else {{
+            try {{
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.*", null, {{path: 2}});
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.*", null, {{path: 1}});
+
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.Username", null, {{value: "{pppoe_user_temp}"}});
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.Password", null, {{value: "{pppoe_pass_temp}"}});
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.ConnectionType", null, {{value: "IP_Routed"}});
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.ConnectionTrigger", null, {{value: "AlwaysOn"}});
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.TransportType", null, {{value: "PPPoE"}});
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.X_HW_SERVICELIST", null, {{value: "INTERNET"}});
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.X_HW_VLAN", null, {{value: {vlan}}});
+
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.Enable", null, {{value: true}});
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.NATEnabled", null, {{value: true}});
+                declare("Tags.temp", null, {{value: true}});
+
+            }} catch (err) {{
+                throw new Error("❌ Error al crear instancia WANConnectionDevice (temp): " + err.message);
             }}
             }}
             """
@@ -586,6 +608,82 @@ def provision_device_dynamic(
         return response
     except requests.RequestException as e:
         print("❌ Error durante la solicitud:", e)
+        return None
+
+
+def provision_device_dynamic_ma(
+    serial_target,
+    pppoe_user,
+    pppoe_pass,
+    vlan=102,
+    tag="AutoProvisioned",
+    provision_name="crear_pppoe_vlan102",
+    host=SERVER_ACS,
+    pppoe_user_temp="user_temp",
+    pppoe_pass_temp=pppoe_pass,
+    ):
+    url = f"{host}/provisions/{provision_name}"
+    headers = {
+        "Content-Type": "text/plain"
+    }
+
+    script = f"""
+            log('pppoe ma');
+            let serialNumber = declare('DeviceID.SerialNumber', {{ value: 1 }}).value[0]
+            log(serialNumber)
+
+            if(serialNumber == '{serial_target}'){{
+            let wanConnDevInst = null;
+            try {{
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.*", null, {{path: 2}});
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.*", null, {{path: 1}});
+                log("✅ Instancia WANConnectionDevice creada: " + JSON.stringify(wanConnDevInst));
+
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.Username", null, {{value: "{pppoe_user}"}});
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.Password", null, {{value: "{pppoe_pass}"}});
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.ConnectionType", null, {{value: "IP_Routed"}});
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.ConnectionTrigger", null, {{value: "AlwaysOn"}});
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.TransportType", null, {{value: "PPPoE"}});
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.X_HW_SERVICELIST", null, {{value: "INTERNET"}});
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.X_HW_VLAN", null, {{value: {vlan}}});
+
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.Enable", null, {{value: true}});
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.NATEnabled", null, {{value: true}});
+                declare("Tags.{tag}", null, {{value: true}});
+
+            }} catch (err) {{
+                throw new Error("❌ Error al crear instancia WANConnectionDevice: " + err.message);
+            }}
+            }} else {{
+            try {{
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.*", null, {{path: 2}});
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.*", null, {{path: 1}});
+
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.Username", null, {{value: "{pppoe_user_temp}"}});
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.Password", null, {{value: "{pppoe_pass_temp}"}});
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.ConnectionType", null, {{value: "IP_Routed"}});
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.ConnectionTrigger", null, {{value: "AlwaysOn"}});
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.TransportType", null, {{value: "PPPoE"}});
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.X_HW_SERVICELIST", null, {{value: "INTERNET"}});
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.X_HW_VLAN", null, {{value: {vlan}}});
+
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.Enable", null, {{value: true}});
+                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.NATEnabled", null, {{value: true}});
+                declare("Tags.temp", null, {{value: true}});
+
+            }} catch (err) {{
+                throw new Error("❌ Error al crear instancia WANConnectionDevice (temp): " + err.message);
+            }}
+            }}
+            """
+
+    try:
+        response = requests.put(url, data=script.encode("utf-8"), headers=headers)
+        print(f"✅ Código de estado MA: {response.status_code}")
+        print("📦 Respuesta:", response.text)
+        return response
+    except requests.RequestException as e:
+        print("❌ Error durante la solicitud MA:", e)
         return None
 
 
@@ -835,13 +933,13 @@ def alta_ont_web_v3_ma():
         tn, resultado = alta_ont_version_three_ma(frame, slot, port, ontid, sn, desc, sp)
 
         user = to_camel_case(desc)
-        response = provision_device_dynamic(
+        response = provision_device_dynamic_ma(
             serial_target=sn,
             pppoe_user=pppoe,
             pppoe_pass=PASSWORD_PPPOE,
-            vlan=VLAN,
+            vlan=102,
             tag=user,
-            provision_name="crear_pppoe_vlan100",
+            provision_name="crear_pppoe_vlan102",
             host=SERVER_ACS
         )
         print("Salida Guardando...")
