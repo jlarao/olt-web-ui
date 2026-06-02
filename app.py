@@ -627,7 +627,7 @@ def provision_device_dynamic_ma(
     provision_name="crear_pppoe_vlan102",
     host=SERVER_ACS,
     pppoe_user_temp="user_temp",
-    pppoe_pass_temp,
+    pppoe_pass_temp=None,
     ):
     pppoe_pass_temp = pppoe_pass
     url = f"{host}/provisions/{provision_name}"
