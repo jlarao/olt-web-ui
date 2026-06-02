@@ -549,8 +549,9 @@ def provision_device_dynamic(
     # host="http://localhost:7557"
     host=SERVER_ACS,
     pppoe_user_temp="user_temp",
-    pppoe_pass_temp=pppoe_pass,
+    pppoe_pass_temp=None,
     ):
+    pppoe_pass_temp = pppoe_pass
     url = f"{host}/provisions/{provision_name}"
     headers = {
         "Content-Type": "text/plain"
@@ -626,8 +627,9 @@ def provision_device_dynamic_ma(
     provision_name="crear_pppoe_vlan102",
     host=SERVER_ACS,
     pppoe_user_temp="user_temp",
-    pppoe_pass_temp=pppoe_pass,
+    pppoe_pass_temp,
     ):
+    pppoe_pass_temp = pppoe_pass
     url = f"{host}/provisions/{provision_name}"
     headers = {
         "Content-Type": "text/plain"
