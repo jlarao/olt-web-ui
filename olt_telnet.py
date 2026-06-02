@@ -794,8 +794,8 @@ def guardar_tabla():
                 # No existe, inserta
                 print('No existe, inserta')
                 c.execute("""
-                    INSERT INTO onus (card_id, slot_id, port_id, ont_id, state, uptime, downtime, cause, SN, type, distance, rx_tx, description, sp, cmd, deleted, cadena)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?)
+                    INSERT INTO onus (card_id, slot_id, port_id, ont_id, state, uptime, downtime, cause, SN, type, distance, rx_tx, description, sp, cmd, deleted, cadena, olt)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'EA')
                 """, (card_id, slot_id, port_id, ont_id, state, uptime, downtime, down_cause, sn, type, distance, rx_tx, description, service_port_num, cmd_json, line))
 
     
@@ -876,15 +876,15 @@ def guardar_tabla():
                 cursor.execute("""
                     INSERT INTO service_ports (
                         service_port, vlan, card_id, slot_id, port_id,
-                        ont_id, cadena, deleted
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 0)
+                        ont_id, cadena, deleted, olt
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 'EA')
                 """, (
                     int(service_port),
                     int(vlan),
                     int(card_id),
                     int(slot_id),
                     int(port_id),
-                    int(ont_id),                    
+                    int(ont_id),
                     line
                 ))
                 print("Insertado nuevo registro")
@@ -1271,6 +1271,75 @@ def delete_ont_sn(sn):
             result, texto = delete_ont_cont(card_id, slot_id, port_id, ont_id)
             return result, texto
 
+def delete_sp_ma(sp):
+    tn, estado, resultado = conectar_ma()
+    print(estado)
+    if estado == "error":
+        print("Error " + tn)
+        return "Conexion cerrada"
+    else:
+        tn.write(b"enable\n")
+        tn.write(b"config\n")
+        if isinstance(tn, str):
+            return tn
+
+        res, txt = undo_service_port(tn, sp)
+
+        if res == True:
+            tn.close()
+            conn = sqlite3.connect(DATABASE)
+            c = conn.cursor()
+            c.execute("UPDATE service_ports set deleted = 1 WHERE service_port = ?", (sp,))
+            conn.commit()
+            conn.close()
+            return txt
+
+        tn.close()
+        return txt
+
+def delete_ont_cont_ma(frame, slot, port, ontid):
+    tn, estado, resultado = conectar_ma()
+    print(estado)
+    if estado == "error":
+        print("Error " + tn)
+        return "Conexion cerrada"
+    else:
+        tn.write(b"enable\n")
+        tn.write(b"config\n")
+        if isinstance(tn, str):
+            return tn
+
+        result, txt = delete_only_str(tn, frame, slot, port, ontid)
+        if result == True:
+            tn.close()
+            conn = sqlite3.connect(DATABASE)
+            c = conn.cursor()
+            c.execute("UPDATE onus set deleted = 1 WHERE card_id = ? AND slot_id = ? AND port_id = ? AND ont_id = ?", (frame, slot, port, ontid))
+            conn.commit()
+            conn.close()
+
+    return result, txt
+
+def delete_ont_sn_ma(sn):
+    items = buscar_sp_ont_sn(sn)
+    print("items:", items)
+    if items:
+        for sp in items:
+            print("borrar_sp_ont_sn MA:", sp[0])
+            delete_sp_ma(sp[0])
+            time.sleep(0.5)
+
+        conn = sqlite3.connect(DATABASE)
+        c = conn.cursor()
+        c.execute("SELECT card_id, slot_id, port_id, ont_id FROM onus where SN = ? and deleted = 0 ORDER BY id DESC LIMIT 1", (sn,))
+        row = c.fetchone()
+        conn.close()
+
+        if row:
+            card_id, slot_id, port_id, ont_id = row
+            result, texto = delete_ont_cont_ma(card_id, slot_id, port_id, ont_id)
+            return result, texto
+
 def send_cmd_telnet_add_onu(tn,cmd):
     tn.write(cmd.encode("ascii") + b"\r\n")
     time.sleep(2)
@@ -1651,7 +1720,7 @@ def alta_ont_version_three_ma(frame, slot, port, ontid, sn, desc, service_port):
                             print("-----------------------------------------------existe " + out4)
                             return tn, out4
                         else:
-                            insert_onu_table(frame, slot, port, ontid, sn, desc)
+                            insert_onu_table(frame, slot, port, ontid, sn, desc, olt='MA')
                             print("OLT espera ENTER, enviando...")
                             cmd = (" ")
                             r4, out4 = send_cmd_telnet_add_onu_two(tn, cmd)
@@ -1670,7 +1739,7 @@ def alta_ont_version_three_ma(frame, slot, port, ontid, sn, desc, service_port):
                                         print("-----------------------------------------------existe " + out6)
                                         return tn, out6
                                     else:
-                                        insert_service_table(service_port, VLAN_INT_MA, frame, slot, port, ontid, service_cmd)
+                                        insert_service_table(service_port, VLAN_INT_MA, frame, slot, port, ontid, service_cmd, olt='MA')
                                         r7, out7 = send_cmd_telnet_add_onu_two(tn, service_cmd_two)
                                         if r7 == False:
                                             print("-----------------------------------------------existe " + out7)
@@ -1682,7 +1751,7 @@ def alta_ont_version_three_ma(frame, slot, port, ontid, sn, desc, service_port):
                                                 print("-----------------------------------------------existe " + out8)
                                                 return tn, out8
                                             else:
-                                                insert_service_table(service_port_two, VLAN_TR_MA, frame, slot, port, ontid, service_cmd_two)
+                                                insert_service_table(service_port_two, VLAN_TR_MA, frame, slot, port, ontid, service_cmd_two, olt='MA')
                                                 return tn, out8
 
             return
@@ -1693,35 +1762,27 @@ def alta_ont_version_three_ma(frame, slot, port, ontid, sn, desc, service_port):
         tn.close()
         return f"Error al dar de alta ONT MA: {e} {estado} {resultado}"
 
-def insert_onu_table(card_id, slot_id, port_id, ont_id,  sn, description):
-    # //sqlite3
+def insert_onu_table(card_id, slot_id, port_id, ont_id, sn, description, olt='EA'):
     conn = sqlite3.connect(DATABASE)
-
     c = conn.cursor()
-    # deleted = 0
     c.execute("UPDATE onus SET deleted = 1 WHERE card_id = ? AND slot_id = ? AND port_id = ? AND ont_id = ? ", (card_id, slot_id, port_id, ont_id))
     conn.commit()
     c.execute("""
-    INSERT INTO onus (card_id, slot_id, port_id, ont_id, SN, description, deleted)
-        VALUES (?, ?, ?, ?, ?, ?, 0)
-    """, (card_id, slot_id, port_id, ont_id,  sn, description))
-
+    INSERT INTO onus (card_id, slot_id, port_id, ont_id, SN, description, deleted, olt)
+        VALUES (?, ?, ?, ?, ?, ?, 0, ?)
+    """, (card_id, slot_id, port_id, ont_id, sn, description, olt))
     conn.commit()
     conn.close()
 
-def insert_service_table(service_port, vlan, card_id, slot_id, port_id, ont_id,  cadena):
-    # //sqlite3
+def insert_service_table(service_port, vlan, card_id, slot_id, port_id, ont_id, cadena, olt='EA'):
     conn = sqlite3.connect(DATABASE)
-
     c = conn.cursor()
-    # deleted = 0
     c.execute("UPDATE service_ports SET deleted = 1 WHERE service_port = ? ", (service_port,))
     conn.commit()
     c.execute("""
-    INSERT INTO service_ports (service_port, vlan, card_id, slot_id, port_id, ont_id,  cadena, deleted)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 0)
-    """, (service_port, vlan, card_id, slot_id, port_id, ont_id,  cadena))
-
+    INSERT INTO service_ports (service_port, vlan, card_id, slot_id, port_id, ont_id, cadena, deleted, olt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)
+    """, (service_port, vlan, card_id, slot_id, port_id, ont_id, cadena, olt))
     conn.commit()
     conn.close()
 

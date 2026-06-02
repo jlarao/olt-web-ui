@@ -62,7 +62,7 @@ sys.stderr = LogStream(logging.getLogger("stderr").error)
 # Silenciar warnings internos de Werkzeug/Flask
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
-from olt_telnet import alta_ont, consultar_potencia, descargar_config, guardar_sqlite, conectar, obtener_ultimo_config, parse_ont_info, limpiar_salida_olt, extraer_service_ports, delete_sp, delete_ont_cont, guardar_tabla, get_potencia, alta_ont_versiontwo, delete_ont_sn, alta_ont_version_three, send_cmd_telnet_add_onu_two, alta_ont_version_three_ma, conectar_ma
+from olt_telnet import alta_ont, consultar_potencia, descargar_config, guardar_sqlite, conectar, obtener_ultimo_config, parse_ont_info, limpiar_salida_olt, extraer_service_ports, delete_sp, delete_ont_cont, guardar_tabla, get_potencia, alta_ont_versiontwo, delete_ont_sn, alta_ont_version_three, send_cmd_telnet_add_onu_two, alta_ont_version_three_ma, conectar_ma, delete_ont_sn_ma
 
 LINE_PROFILE = os.getenv("LINE_PROFILE_ID", "500")
 SRV_PROFILE = os.getenv("SRV_PROFILE_ID", "500")
@@ -404,6 +404,12 @@ def verificar_pwd():
 # @login_required
 def borrar_ont_sn(sn):
     delete_ont_sn(sn)
+    return redirect(url_for("alta_ont_web_v4", sn=sn))
+
+@app.route("/borrar_ont_sn_ma/<sn>")
+# @login_required
+def borrar_ont_sn_ma(sn):
+    delete_ont_sn_ma(sn)
     return redirect(url_for("alta_ont_web_v4", sn=sn))
 
 @app.route("/alta-ont-v2", methods=["GET"])
