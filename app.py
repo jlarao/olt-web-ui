@@ -586,25 +586,7 @@ def provision_device_dynamic(
                 throw new Error("❌ Error al crear instancia WANConnectionDevice: " + err.message);
             }}
             }} else {{
-            try {{
-                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.*", null, {{path: 2}});
-                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.*", null, {{path: 1}});
-
-                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.Username", null, {{value: "{pppoe_user_temp}"}});
-                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.Password", null, {{value: "{pppoe_pass_temp}"}});
-                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.ConnectionType", null, {{value: "IP_Routed"}});
-                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.ConnectionTrigger", null, {{value: "AlwaysOn"}});
-                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.TransportType", null, {{value: "PPPoE"}});
-                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.X_HW_SERVICELIST", null, {{value: "INTERNET"}});
-                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.X_HW_VLAN", null, {{value: {vlan}}});
-
-                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.Enable", null, {{value: true}});
-                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.NATEnabled", null, {{value: true}});
-                declare("Tags.temp", null, {{value: true}});
-
-            }} catch (err) {{
-                throw new Error("❌ Error al crear instancia WANConnectionDevice (temp): " + err.message);
-            }}
+            
             }}
             """
 
@@ -663,25 +645,7 @@ def provision_device_dynamic_ma(
                 throw new Error("❌ Error al crear instancia WANConnectionDevice: " + err.message);
             }}
             }} else {{
-            try {{
-                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.*", null, {{path: 2}});
-                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.*", null, {{path: 1}});
-
-                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.Username", null, {{value: "{pppoe_user_temp}"}});
-                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.Password", null, {{value: "{pppoe_pass_temp}"}});
-                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.ConnectionType", null, {{value: "IP_Routed"}});
-                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.ConnectionTrigger", null, {{value: "AlwaysOn"}});
-                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.TransportType", null, {{value: "PPPoE"}});
-                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.X_HW_SERVICELIST", null, {{value: "INTERNET"}});
-                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.X_HW_VLAN", null, {{value: {vlan}}});
-
-                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.Enable", null, {{value: true}});
-                declare("InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.NATEnabled", null, {{value: true}});
-                declare("Tags.temp", null, {{value: true}});
-
-            }} catch (err) {{
-                throw new Error("❌ Error al crear instancia WANConnectionDevice (temp): " + err.message);
-            }}
+            
             }}
             """
 
@@ -890,6 +854,30 @@ def sheet_ma():
         recfill.append(record)
 
     return render_template("sheet_ma.html", records=recfill)
+
+@app.route("/buscar-sn/<sn>", methods=["GET"])
+def buscar_sn(sn):
+    import gspread
+    from oauth2client.service_account import ServiceAccountCredentials
+
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = ServiceAccountCredentials.from_json_keyfile_name('react-elearning-e12a6-c869ba1c268d.json', scope)
+    client = gspread.authorize(creds)
+
+    spreadsheet = client.open("Ingreso2024")
+    sn_upper = sn.strip().upper()
+
+    for ws_name in ["cuentas fibra", "cuentas fibra ma"]:
+        records = spreadsheet.worksheet(ws_name).get_all_records()
+        for record in records:
+            if str(record.get("sn", "")).strip().upper() == sn_upper:
+                return jsonify({
+                    "sn": record.get("sn"),
+                    "user": record.get("user"),
+                    "vlan": record.get("vlan")
+                })
+
+    return jsonify([])
 
 @app.route("/alta-ont-gs", methods=["POST"])
 # @login_required
