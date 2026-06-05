@@ -874,10 +874,12 @@ def buscar_sn(sn):
                 return jsonify({
                     "sn": record.get("sn"),
                     "user": record.get("user"),
+                    "password": record.get("password", "P1n0@Su4r3z"),
                     "vlan": record.get("vlan")
-                })
+                }), 200
 
-    return jsonify([])
+    # Cuando NO ENCUENTRA información:
+    return jsonify({"error": "ONT no encontrada"}), 404
 
 @app.route("/alta-ont-gs", methods=["POST"])
 # @login_required
