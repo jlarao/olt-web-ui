@@ -10,7 +10,18 @@ import json
 from dotenv import load_dotenv
 from datetime import datetime
 import re
+import unicodedata
 load_dotenv()
+
+def to_genieacs_tag(name):
+    if not name:
+        return ""
+    normalized = unicodedata.normalize("NFKD", str(name))
+    ascii_str = normalized.encode("ascii", "ignore").decode("ascii")
+    words = [w for w in re.split(r'[^a-zA-Z0-9]+', ascii_str) if w]
+    if not words:
+        return ""
+    return words[0].lower() + "".join(w.capitalize() for w in words[1:])
 
 # --- Configuracion de logging ---
 LOG_FILE = os.getenv("LOG_FILE", "app.log")
@@ -877,7 +888,8 @@ def buscar_sn(sn):
                     "sn": record.get("sn"),
                     "user": record.get("user"),
                     "password": record.get("password", "P1n0@Su4r3z"),
-                    "vlan": record.get("vlan")
+                    "vlan": record.get("vlan"),
+                    "tag": to_genieacs_tag(record.get("name", ""))
                 }
                 logger.info(f"[buscar-sn] Encontrado en '{ws_name}' | SN: {result['sn']} | user: {result['user']} | vlan: {result['vlan']}")
                 return jsonify(result), 200
