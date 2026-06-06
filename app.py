@@ -472,15 +472,15 @@ def alta_ont_web_v3():
         # return
         # resultado = 'Success';
         user = to_camel_case(desc)
-        response = provision_device_dynamic(
-            serial_target=sn,
-            pppoe_user=pppoe,
-            pppoe_pass=PASSWORD_PPPOE,
-            vlan=VLAN,
-            tag=user,
-            provision_name="crear_pppoe_vlan100",
-            host=SERVER_ACS
-        )
+        # response = provision_device_dynamic(
+        #     serial_target=sn,
+        #     pppoe_user=pppoe,
+        #     pppoe_pass=PASSWORD_PPPOE,
+        #     vlan=VLAN,
+        #     tag=user,
+        #     provision_name="crear_pppoe_vlan100",
+        #     host=SERVER_ACS
+        # )
         print("Salida Guardando...")                    
 
         time.sleep(10)
@@ -935,15 +935,15 @@ def alta_ont_web_v3_ma():
         tn, resultado = alta_ont_version_three_ma(frame, slot, port, ontid, sn, desc, sp)
 
         user = to_camel_case(desc)
-        response = provision_device_dynamic_ma(
-            serial_target=sn,
-            pppoe_user=pppoe,
-            pppoe_pass=PASSWORD_PPPOE,
-            vlan=102,
-            tag=user,
-            provision_name="crear_pppoe_vlan102",
-            host=SERVER_ACS
-        )
+        # response = provision_device_dynamic_ma(
+        #     serial_target=sn,
+        #     pppoe_user=pppoe,
+        #     pppoe_pass=PASSWORD_PPPOE,
+        #     vlan=102,
+        #     tag=user,
+        #     provision_name="crear_pppoe_vlan102",
+        #     host=SERVER_ACS
+        # )
         print("Salida Guardando...")
 
         time.sleep(10)
