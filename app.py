@@ -860,6 +860,8 @@ def buscar_sn(sn):
     import gspread
     from oauth2client.service_account import ServiceAccountCredentials
 
+    logger.info(f"[buscar-sn] Petición recibida | SN: {sn} | IP: {request.remote_addr}")
+
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds = ServiceAccountCredentials.from_json_keyfile_name('react-elearning-e12a6-c869ba1c268d.json', scope)
     client = gspread.authorize(creds)
@@ -871,14 +873,16 @@ def buscar_sn(sn):
         records = spreadsheet.worksheet(ws_name).get_all_records()
         for record in records:
             if str(record.get("sn", "")).strip().upper() == sn_upper:
-                return jsonify({
+                result = {
                     "sn": record.get("sn"),
                     "user": record.get("user"),
                     "password": record.get("password", "P1n0@Su4r3z"),
                     "vlan": record.get("vlan")
-                }), 200
+                }
+                logger.info(f"[buscar-sn] Encontrado en '{ws_name}' | SN: {result['sn']} | user: {result['user']} | vlan: {result['vlan']}")
+                return jsonify(result), 200
 
-    # Cuando NO ENCUENTRA información:
+    logger.warning(f"[buscar-sn] No encontrado | SN: {sn_upper}")
     return jsonify({"error": "ONT no encontrada"}), 404
 
 @app.route("/alta-ont-gs", methods=["POST"])
