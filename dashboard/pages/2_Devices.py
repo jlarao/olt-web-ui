@@ -148,8 +148,13 @@ selection = st.dataframe(
 selected_rows = selection.selection.rows if selection else []
 if selected_rows:
     idx = selected_rows[0]
-    device_id = df.iloc[idx]["_id"]
+    if idx >= len(df):
+        # Selección anterior fuera de rango tras filtrar — ignorar
+        selected_rows = []
+    else:
+        device_id = df.iloc[idx]["_id"]
 
+if selected_rows:
     # Buscar el raw device original
     raw_match = next((d for d in devices if d["id"] == device_id), None)
     if raw_match:
