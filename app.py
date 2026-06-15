@@ -330,6 +330,19 @@ def noc_monitor():
     return render_template("noc_monitor.html", streamlit_url=streamlit_url, port=STREAMLIT_PORT)
 
 
+@app.route("/noc/status")
+@login_required
+def noc_status():
+    """Verifica si Streamlit está listo. Lo usa el frontend via polling."""
+    import socket
+    try:
+        s = socket.create_connection(("127.0.0.1", STREAMLIT_PORT), timeout=1)
+        s.close()
+        return jsonify({"ready": True})
+    except OSError:
+        return jsonify({"ready": False})
+
+
 @app.route("/logout")
 @login_required
 def logout():

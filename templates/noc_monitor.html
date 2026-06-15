@@ -6,6 +6,7 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
     <style>
         html, body { height: 100%; margin: 0; padding: 0; overflow: hidden; }
+
         #topbar {
             height: 48px;
             background: #1a1a2e;
@@ -13,20 +14,32 @@
             align-items: center;
             padding: 0 16px;
             gap: 12px;
+            flex-shrink: 0;
         }
         #topbar a { color: #adb5bd; text-decoration: none; font-size: 0.85rem; }
         #topbar a:hover { color: #fff; }
         #topbar .title { color: #fff; font-weight: 600; font-size: 0.95rem; margin-right: auto; }
-        #topbar .badge-port {
-            background: #0d6efd;
-            color: #fff;
-            padding: 2px 8px;
+        #topbar .badge-status {
+            padding: 2px 10px;
             border-radius: 12px;
             font-size: 0.75rem;
+            font-weight: 600;
+            transition: background .3s;
         }
-        #frame-wrapper { height: calc(100vh - 48px); position: relative; }
-        #noc-frame { width: 100%; height: 100%; border: none; }
-        #loading-overlay {
+        #topbar .badge-status.starting  { background: #6c757d; color: #fff; }
+        #topbar .badge-status.ready     { background: #198754; color: #fff; }
+        #topbar .badge-status.error     { background: #dc3545; color: #fff; }
+
+        #frame-wrapper {
+            height: calc(100vh - 48px);
+            position: relative;
+        }
+        #noc-frame {
+            width: 100%; height: 100%;
+            border: none;
+            display: none;   /* oculto hasta confirmar que Streamlit está listo */
+        }
+        #waiting-overlay {
             position: absolute;
             inset: 0;
             background: #f8f9fa;
@@ -34,55 +47,140 @@
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            gap: 12px;
-            z-index: 10;
+            gap: 14px;
         }
-        #loading-overlay.hidden { display: none; }
+        #waiting-overlay.hidden { display: none; }
+        #progress-bar-wrap {
+            width: 260px;
+            background: #dee2e6;
+            border-radius: 8px;
+            overflow: hidden;
+            height: 6px;
+        }
+        #progress-bar {
+            height: 6px;
+            background: #0d6efd;
+            width: 0%;
+            transition: width .4s ease;
+        }
     </style>
 </head>
 <body>
 
 <div id="topbar">
     <span class="title">📡 NOC — Monitoreo ONUs</span>
-    <span class="badge-port">:{{ port }}</span>
+    <span id="badge-status" class="badge-status starting">Iniciando…</span>
     <a href="/dashboard">← Panel principal</a>
-    <a href="{{ streamlit_url }}" target="_blank" title="Abrir en pestaña nueva">↗ Nueva pestaña</a>
+    <a id="link-new-tab" href="{{ streamlit_url }}" target="_blank">↗ Nueva pestaña</a>
 </div>
 
 <div id="frame-wrapper">
-    <div id="loading-overlay">
-        <div class="spinner-border text-primary" role="status"></div>
-        <p class="text-muted mb-0">Iniciando dashboard NOC…</p>
-        <small class="text-muted">Si no carga en 15 segundos, <a href="{{ streamlit_url }}" target="_blank">ábrelo aquí</a>.</small>
+    <div id="waiting-overlay">
+        <div class="spinner-border text-primary" role="status" id="spinner"></div>
+        <p class="text-muted mb-0" id="status-msg">Verificando que el dashboard esté listo…</p>
+        <div id="progress-bar-wrap">
+            <div id="progress-bar"></div>
+        </div>
+        <small class="text-muted" id="attempt-counter"></small>
+        <div id="error-actions" style="display:none; flex-direction:column; align-items:center; gap:8px;">
+            <a href="{{ streamlit_url }}" target="_blank" class="btn btn-primary btn-sm">
+                Abrir NOC en nueva pestaña
+            </a>
+            <button onclick="startPolling()" class="btn btn-outline-secondary btn-sm">
+                Reintentar
+            </button>
+            <a href="/dashboard" class="btn btn-link btn-sm">← Volver al panel</a>
+        </div>
     </div>
-    <iframe
-        id="noc-frame"
-        src="{{ streamlit_url }}"
-        title="NOC Dashboard"
-        allow="fullscreen"
-        onload="document.getElementById('loading-overlay').classList.add('hidden')"
-    ></iframe>
+
+    <iframe id="noc-frame" src="" title="NOC Dashboard" allow="fullscreen"></iframe>
 </div>
 
 <script>
-    // Si el iframe falla (p.ej. certificado no aceptado), redirigir a pestaña externa
-    const frame = document.getElementById('noc-frame');
-    const overlay = document.getElementById('loading-overlay');
-    const streamlitUrl = "{{ streamlit_url }}";
+    const STREAMLIT_URL  = "{{ streamlit_url }}";
+    const STATUS_URL     = "/noc/status";
+    const MAX_ATTEMPTS   = 20;   // 20 × 2s = 40s máximo de espera
+    const POLL_INTERVAL  = 2000; // ms entre cada verificación
 
-    // Timeout: si después de 20s sigue el overlay, mostrar botón de apertura manual
-    setTimeout(() => {
-        if (!overlay.classList.contains('hidden')) {
-            overlay.innerHTML = `
-                <p class="text-muted">El dashboard tardó en responder.</p>
-                <a href="${streamlitUrl}" target="_blank" class="btn btn-primary">
-                    Abrir NOC en nueva pestaña
-                </a>
-                <a href="/dashboard" class="btn btn-outline-secondary btn-sm mt-2">
-                    ← Volver al panel
-                </a>`;
-        }
-    }, 20000);
+    const overlay   = document.getElementById('waiting-overlay');
+    const frame     = document.getElementById('noc-frame');
+    const badge     = document.getElementById('badge-status');
+    const msgEl     = document.getElementById('status-msg');
+    const counterEl = document.getElementById('attempt-counter');
+    const bar       = document.getElementById('progress-bar');
+    const errDiv    = document.getElementById('error-actions');
+    const spinner   = document.getElementById('spinner');
+
+    let attempt = 0;
+    let pollTimer = null;
+
+    function showReady() {
+        badge.textContent = '● Listo';
+        badge.className = 'badge-status ready';
+        msgEl.textContent = 'Cargando dashboard…';
+        bar.style.width = '100%';
+        counterEl.textContent = '';
+
+        // Cargar el iframe ahora que Streamlit está disponible
+        frame.src = STREAMLIT_URL;
+        frame.style.display = 'block';
+        frame.onload = () => { overlay.classList.add('hidden'); };
+
+        // Fallback: ocultar overlay si onload no dispara (ej. HTTPS mixto)
+        setTimeout(() => overlay.classList.add('hidden'), 5000);
+    }
+
+    function showError() {
+        badge.textContent = '● Sin conexión';
+        badge.className = 'badge-status error';
+        msgEl.textContent = 'No se pudo conectar con el dashboard NOC.';
+        spinner.style.display = 'none';
+        bar.style.width = '0%';
+        counterEl.textContent = '';
+        errDiv.style.display = 'flex';
+    }
+
+    function poll() {
+        attempt++;
+        const pct = Math.min((attempt / MAX_ATTEMPTS) * 90, 90);
+        bar.style.width = pct + '%';
+        counterEl.textContent = `Intento ${attempt} de ${MAX_ATTEMPTS}…`;
+
+        fetch(STATUS_URL)
+            .then(r => r.json())
+            .then(data => {
+                if (data.ready) {
+                    clearTimeout(pollTimer);
+                    showReady();
+                } else if (attempt >= MAX_ATTEMPTS) {
+                    showError();
+                } else {
+                    msgEl.textContent = 'Streamlit está iniciando, espera un momento…';
+                    pollTimer = setTimeout(poll, POLL_INTERVAL);
+                }
+            })
+            .catch(() => {
+                if (attempt >= MAX_ATTEMPTS) {
+                    showError();
+                } else {
+                    pollTimer = setTimeout(poll, POLL_INTERVAL);
+                }
+            });
+    }
+
+    function startPolling() {
+        attempt = 0;
+        errDiv.style.display = 'none';
+        spinner.style.display = 'block';
+        badge.textContent = 'Verificando…';
+        badge.className = 'badge-status starting';
+        msgEl.textContent = 'Verificando que el dashboard esté listo…';
+        bar.style.width = '0%';
+        poll();
+    }
+
+    // Arrancar al cargar la página
+    startPolling();
 </script>
 </body>
 </html>
