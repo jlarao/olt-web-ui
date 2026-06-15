@@ -5,6 +5,8 @@ import sqlite3,time
 import os
 import sys
 import logging
+import subprocess
+import atexit
 from logging.handlers import RotatingFileHandler
 import json
 from dotenv import load_dotenv
@@ -86,6 +88,46 @@ USERNAME_MKT = os.getenv("USERNAME_MKT", "admin")
 PASSWORD_MKT =  os.getenv("PASSWORD_MKT", "admin")
 SERVER_ACS = os.getenv("SERVER_ACS", "192.168.1.7:7557")
 PWD_INSERT_OLT = os.getenv("PWD_INSERT_OLT", "")
+STREAMLIT_PORT = int(os.getenv("STREAMLIT_PORT", "8501"))
+
+# ── Streamlit subprocess ──────────────────────────────────────────────────────
+_streamlit_proc = None
+
+def start_streamlit():
+    global _streamlit_proc
+    dashboard_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dashboard", "app.py")
+    if not os.path.exists(dashboard_path):
+        logging.warning("Dashboard Streamlit no encontrado en %s", dashboard_path)
+        return
+
+    local_dev = os.getenv("LOCAL_DEV", "false").lower() == "true"
+    ssl_cert = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fullchain.pem")
+    ssl_key  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "privkey.pem")
+    use_ssl  = (not local_dev) and os.path.exists(ssl_cert) and os.path.exists(ssl_key)
+
+    cmd = [
+        sys.executable, "-m", "streamlit", "run", dashboard_path,
+        "--server.port",      str(STREAMLIT_PORT),
+        "--server.headless",  "true",
+        "--browser.gatherUsageStats", "false",
+    ]
+    if use_ssl:
+        cmd += ["--server.sslCertFile", ssl_cert, "--server.sslKeyFile", ssl_key]
+
+    _streamlit_proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        cwd=os.path.dirname(os.path.abspath(__file__)),
+    )
+    logging.info("Streamlit NOC iniciado en puerto %s (PID %s)", STREAMLIT_PORT, _streamlit_proc.pid)
+
+def _stop_streamlit():
+    if _streamlit_proc and _streamlit_proc.poll() is None:
+        _streamlit_proc.terminate()
+        logging.info("Streamlit NOC detenido")
+
+atexit.register(_stop_streamlit)
 
 # Cargar variables del archivo .env
 load_dotenv()
@@ -273,6 +315,16 @@ def potencia():
         print(ont_dict)
         return render_template("resultado_get.html", datos_por_puerto=lista_final)
     return render_template("potencia.html")
+
+@app.route("/noc")
+@login_required
+def noc_monitor():
+    local_dev = os.getenv("LOCAL_DEV", "false").lower() == "true"
+    protocol = "http" if local_dev else "https"
+    host = request.host.split(":")[0]
+    streamlit_url = f"{protocol}://{host}:{STREAMLIT_PORT}"
+    return render_template("noc_monitor.html", streamlit_url=streamlit_url, port=STREAMLIT_PORT)
+
 
 @app.route("/logout")
 @login_required
@@ -1070,4 +1122,10 @@ def getpotencia():
     # return result
     return render_template("get_potencia.html", records = r_onts)
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080, ssl_context=("fullchain.pem","privkey.pem"),debug=False)
+    start_streamlit()
+    local_dev = os.getenv("LOCAL_DEV", "false").lower() == "true"
+    if local_dev:
+        # Sin SSL para pruebas locales: http://localhost:8080
+        app.run(host="0.0.0.0", port=8080, debug=True)
+    else:
+        app.run(host="0.0.0.0", port=8080, ssl_context=("fullchain.pem","privkey.pem"), debug=False)
