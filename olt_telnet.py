@@ -306,10 +306,11 @@ def consultar_potencia(conn, frame, slot, port, ontid):
         print("EOF reached before timeout.")
     except Exception as e:
         print(f"An error occurred: {e}")
-    # finally:
-    #     tn.close()
-    # except Exception as e:
-    #     return f"Error al consultar potencia: {e}"
+    finally:
+        try:
+            tn.close()
+        except Exception:
+            pass
 
 def descargar_config(conn):
     try:
@@ -381,8 +382,11 @@ def descargar_config(conn):
         print("EOF reached before timeout.")
     except Exception as e:
         print(f"An error occurred: {e}")
-    # finally:
-    #     tn.close()
+    finally:
+        try:
+            tn.close()
+        except Exception:
+            pass
 
 def guardar_sqlite(output, tipo):
     

@@ -89,6 +89,7 @@ PASSWORD_MKT =  os.getenv("PASSWORD_MKT", "admin")
 SERVER_ACS = os.getenv("SERVER_ACS", "192.168.1.7:7557")
 PWD_INSERT_OLT = os.getenv("PWD_INSERT_OLT", "")
 STREAMLIT_PORT = int(os.getenv("STREAMLIT_PORT", "8501"))
+STREAMLIT_PUBLIC_URL = os.getenv("STREAMLIT_PUBLIC_URL", "")  # si se define, sobreescribe la URL del iframe
 
 # ── Streamlit subprocess ──────────────────────────────────────────────────────
 _streamlit_proc = None
@@ -319,10 +320,13 @@ def potencia():
 @app.route("/noc")
 @login_required
 def noc_monitor():
-    local_dev = os.getenv("LOCAL_DEV", "false").lower() == "true"
-    protocol = "http" if local_dev else "https"
-    host = request.host.split(":")[0]
-    streamlit_url = f"{protocol}://{host}:{STREAMLIT_PORT}"
+    if STREAMLIT_PUBLIC_URL:
+        streamlit_url = STREAMLIT_PUBLIC_URL.rstrip("/")
+    else:
+        local_dev = os.getenv("LOCAL_DEV", "false").lower() == "true"
+        protocol = "http" if local_dev else "https"
+        host = request.host.split(":")[0]
+        streamlit_url = f"{protocol}://{host}:{STREAMLIT_PORT}"
     return render_template("noc_monitor.html", streamlit_url=streamlit_url, port=STREAMLIT_PORT)
 
 
