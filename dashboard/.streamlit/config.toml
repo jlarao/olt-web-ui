@@ -1,0 +1,9 @@
+[server]
+# Permite que Streamlit sea embebido en un iframe desde cualquier origen.
+# Sin esto, Streamlit envía X-Frame-Options: SAMEORIGIN y el iframe del
+# panel Flask lo rechaza con "no resource with given identifier found".
+enableCORS = false
+enableXsrfProtection = false
+
+[browser]
+gatherUsageStats = false
