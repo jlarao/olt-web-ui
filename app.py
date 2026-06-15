@@ -88,7 +88,8 @@ USERNAME_MKT = os.getenv("USERNAME_MKT", "admin")
 PASSWORD_MKT =  os.getenv("PASSWORD_MKT", "admin")
 SERVER_ACS = os.getenv("SERVER_ACS", "192.168.1.7:7557")
 PWD_INSERT_OLT = os.getenv("PWD_INSERT_OLT", "")
-STREAMLIT_PORT = int(os.getenv("STREAMLIT_PORT", "8501"))
+STREAMLIT_PORT        = int(os.getenv("STREAMLIT_PORT", "8502"))        # puerto interno (nginx expone 8501)
+STREAMLIT_NGINX_PORT  = int(os.getenv("STREAMLIT_NGINX_PORT", "8501"))   # puerto público (nginx con SSL)
 STREAMLIT_PUBLIC_URL = os.getenv("STREAMLIT_PUBLIC_URL", "")  # si se define, sobreescribe la URL del iframe
 
 # ── Streamlit subprocess ──────────────────────────────────────────────────────
@@ -101,19 +102,15 @@ def start_streamlit():
         logging.warning("Dashboard Streamlit no encontrado en %s", dashboard_path)
         return
 
-    local_dev = os.getenv("LOCAL_DEV", "false").lower() == "true"
-    ssl_cert = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fullchain.pem")
-    ssl_key  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "privkey.pem")
-    use_ssl  = (not local_dev) and os.path.exists(ssl_cert) and os.path.exists(ssl_key)
-
+    # Streamlit corre en HTTP puro; nginx (puerto STREAMLIT_NGINX_PORT) termina el SSL
     cmd = [
         sys.executable, "-m", "streamlit", "run", dashboard_path,
-        "--server.port",      str(STREAMLIT_PORT),
-        "--server.headless",  "true",
-        "--browser.gatherUsageStats", "false",
+        "--server.port",                 str(STREAMLIT_PORT),
+        "--server.headless",             "true",
+        "--server.enableCORS",           "false",
+        "--server.enableXsrfProtection", "false",
+        "--browser.gatherUsageStats",    "false",
     ]
-    if use_ssl:
-        cmd += ["--server.sslCertFile", ssl_cert, "--server.sslKeyFile", ssl_key]
 
     _streamlit_proc = subprocess.Popen(
         cmd,
