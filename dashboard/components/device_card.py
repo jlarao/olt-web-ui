@@ -116,9 +116,14 @@ def render_device_card(raw_device: dict, threshold_hours: int = OFFLINE_THRESHOL
 
 
 def _refresh_gpon(device_id: str):
-    """Crea un task getParameterValues en GenieACS y limpia el cache."""
+    """
+    Crea un task getParameterValues en GenieACS con connection_request.
+    GenieACS contacta al dispositivo, lee los valores y responde 200 cuando termina.
+    Luego limpia el caché y recarga la página automáticamente.
+    """
     client = GenieACSClient()
-    with st.spinner("Enviando solicitud de actualización al dispositivo…"):
+
+    with st.spinner("Contactando dispositivo, espere…"):
         result = client.create_task(
             device_id=device_id,
             task_body={
@@ -130,13 +135,17 @@ def _refresh_gpon(device_id: str):
         )
 
     if result is None:
-        st.error("No se pudo crear el task. Revisa el log NBI.")
+        st.error("No se pudo ejecutar el task. Revisa el log NBI.")
         return
 
-    task_id  = result.get("_id", "?")
-    st.success(f"✅ Task ejecutado — ID: `{task_id}`")
-    st.caption("Los valores se actualizarán en la próxima carga. Haz clic en **Actualizar** para ver los nuevos datos.")
+    http_status = result.get("_http_status")
+    task_id     = result.get("_id", "?")
 
-    # Limpiar caché para que el próximo render traiga datos frescos
-    import streamlit as st_mod
-    st_mod.cache_data.clear()
+    if http_status == 200:
+        st.success(f"✅ Valores actualizados — recargando…")
+    else:
+        # 202 = task encolado, el dispositivo no respondió en el timeout
+        st.warning(f"⚠️ Task encolado (dispositivo no respondió aún) — ID: `{task_id}`")
+
+    st.cache_data.clear()
+    st.rerun()

@@ -242,6 +242,7 @@ class GenieACSClient:
 
             if r.status_code in (200, 201, 202):
                 data = r.json() if r.content else {}
+                data["_http_status"] = r.status_code   # 200 = ejecutado, 202 = encolado
                 logger.info("← %s %dms | task=%s", r.status_code, elapsed_ms, data.get("_id", "?"))
                 _st_log_append(log_entry)
                 return data
@@ -473,26 +474,26 @@ def flatten_device(d: dict, threshold_hours: int = OFFLINE_THRESHOLD_HOURS) -> d
 # Funciones cacheadas para Streamlit
 # ──────────────────────────────────────────────
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=10)
 def cached_get_devices(threshold_hours: int = OFFLINE_THRESHOLD_HOURS) -> list[dict]:
     client = GenieACSClient()
     raw = client.get_devices(limit=2000)
     return [flatten_device(d, threshold_hours) for d in raw]
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=10)
 def cached_get_faults() -> list[dict]:
     client = GenieACSClient()
     return client.get_faults()
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=10)
 def cached_get_files() -> list[dict]:
     client = GenieACSClient()
     return client.get_files()
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=10)
 def cached_get_tasks() -> list[dict]:
     client = GenieACSClient()
     return client.get_tasks()

@@ -3,14 +3,13 @@ import os
 
 sys.path.insert(0, os.path.dirname(__file__))
 
-import time
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 import pandas as pd
 from datetime import datetime, timezone, timedelta
 
-from config import DASHBOARD_TITLE, OFFLINE_THRESHOLD_HOURS, REFRESH_INTERVAL_SECONDS, STATUS_COLORS
+from config import DASHBOARD_TITLE, OFFLINE_THRESHOLD_HOURS, STATUS_COLORS
 from genieacs_client import (
     GenieACSClient,
     cached_get_devices,
@@ -191,15 +190,3 @@ else:
     st.success("Todas las ONUs están en línea.")
 
 render_nbi_log()
-
-# ── Auto-refresh ─────────────────────────────────────────────────────────────
-if REFRESH_INTERVAL_SECONDS > 0:
-    with st.sidebar:
-        st.markdown("---")
-        st.caption(f"Auto-refresh cada {REFRESH_INTERVAL_SECONDS}s")
-        placeholder = st.empty()
-        for remaining in range(REFRESH_INTERVAL_SECONDS, 0, -1):
-            placeholder.caption(f"Próxima actualización en {remaining}s")
-            time.sleep(1)
-        st.cache_data.clear()
-        st.rerun()
