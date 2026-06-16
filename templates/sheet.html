@@ -57,6 +57,7 @@
             <!-- <th>Comment</th> -->
             <th>Service Port</th>
             <th>Link</th>
+            <th>Borrar</th>
         </thead>
         <tbody>
             {% for item in records %}
@@ -93,12 +94,18 @@
                         <button type="submit">Trans</button>
                     </form>
                 </a></td>
+                <td>
+                    {% if item.sn and item.sn|string|trim != '' %}
+                    <a href="/borrar_ont_sn/{{ item.sn }}" class="btn btn-sm btn-danger"
+                       onclick="return confirm('¿Borrar ONT con SN {{ item.sn }}?')">Borrar</a>
+                    {% endif %}
+                </td>
             </tr>
             {% endfor %}
         </tbody>
         <tfoot>
                   												<tr>
-                  													<td colspan="9" class="pager form-horizontal">
+                  													<td colspan="10" class="pager form-horizontal">
                   														<button class="btn first"><i class="fa fa-step-backward"></i></button>
                   														<button class="btn prev"><i class="fa fa-arrow-left"></i></button>
                   														<span class="pagedisplay"></span> <!-- this can be any element, including an input -->
