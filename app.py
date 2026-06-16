@@ -1005,10 +1005,13 @@ def alta_ont_web_gs_ma():
 
         return render_template("alta_ont_gs_ma.html", frame=frame, slot=slot, port=port, ontid=ontid, sn=sn, desc=desc, sp=sp, pppoe=pppoe)
 
-@app.route("/alta-ont-v3-ma", methods=["POST"])
+@app.route("/alta-ont-v3-ma", methods=["GET", "POST"])
 # @login_required
 def alta_ont_web_v3_ma():
-    if request.method == "POST":
+    if request.method == "GET":
+        return "Esta ruta solo acepta POST. Envía el formulario desde /sheet_ma.", 405
+
+    try:
         frame = request.form["frame"]
         slot = request.form["slot"]
         port = request.form["port"]
@@ -1019,20 +1022,23 @@ def alta_ont_web_v3_ma():
         pppoe = request.form["pppoe"]
         profile = request.form["profile"]
 
+        logger.info(f"[alta-ont-v3-ma] Inicio | SN: {sn} | pppoe: {pppoe} | port: {port} | ontid: {ontid}")
+
         tn, resultado = alta_ont_version_three_ma(frame, slot, port, ontid, sn, desc, sp)
 
-        user = to_camel_case(desc)
-        # response = provision_device_dynamic_ma(
-        #     serial_target=sn,
-        #     pppoe_user=pppoe,
-        #     pppoe_pass=PASSWORD_PPPOE,
-        #     vlan=102,
-        #     tag=user,
-        #     provision_name="crear_pppoe_vlan102",
-        #     host=SERVER_ACS
-        # )
-        print("Salida Guardando...")
+        logger.info(f"[alta-ont-v3-ma] alta_ont_version_three_ma completado | SN: {sn}")
 
+        # Si tn es None o el resultado contiene error, no continuar con save ni MikroTik
+        if tn is None or "Failure" in str(resultado) or "failure" in str(resultado) or "Error" in str(resultado):
+            logger.error(f"[alta-ont-v3-ma] Error detectado, abortando | SN: {sn} | resultado: {resultado}")
+            if tn is not None:
+                try:
+                    tn.close()
+                except Exception:
+                    pass
+            return render_template("resultado_alta_v2.html", resultado=resultado)
+
+        print("Salida Guardando...")
         time.sleep(10)
         cmd = f"save\r\n"
         r, out = send_cmd_telnet_add_onu_two(tn, cmd)
@@ -1041,8 +1047,17 @@ def alta_ont_web_v3_ma():
         print(repr(out))
         tn.close()
 
+        logger.info(f"[alta-ont-v3-ma] Llamando call_mkt | pppoe: {pppoe} | profile: {profile}")
         call_mkt(pppoe, profile, desc)
+
+        logger.info(f"[alta-ont-v3-ma] Finalizado OK | SN: {sn}")
         return render_template("resultado_alta_v2.html", resultado=resultado)
+
+    except Exception as e:
+        import traceback
+        tb = traceback.format_exc()
+        logger.error(f"[alta-ont-v3-ma] ERROR: {e}\n{tb}")
+        return f"<pre>ERROR en /alta-ont-v3-ma:\n\n{tb}</pre>", 500
 
 @app.route("/alta-ont-gs-transp", methods=["POST"])
 # @login_required
@@ -1145,7 +1160,7 @@ def getpotencia():
     # return result
     return render_template("get_potencia.html", records = r_onts)
 if __name__ == "__main__":
-    start_streamlit()
+    # start_streamlit()
     local_dev = os.getenv("LOCAL_DEV", "false").lower() == "true"
     if local_dev:
         app.run(host="0.0.0.0", port=8080, debug=True)

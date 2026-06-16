@@ -41,6 +41,7 @@ OLT_USER_MA = os.getenv("OLT_USER_MA")
 OLT_PASS_MA = os.getenv("OLT_PASS_MA")
 
 def conectar():
+    tn = None
     try:
         print("Conectando al servidor...")
         print(OLT_IP)
@@ -84,6 +85,7 @@ def conectar():
         return tn, "error", f"Excepción durante login: {e}"
 
 def conectar_ma():
+    tn = None
     try:
         print("Conectando al servidor MA...")
         print(OLT_IP_MA)
@@ -124,6 +126,7 @@ def conectar_ma():
 
 # para routers sin wifi modo transparente
 def alta_ont(frame, slot, port, ontid, sn, desc, service_port):
+    tn = None
     try:
         tipo = 'alta_onu'
         PATRON_CR = re.compile(r"{\s*<cr>.*?}", re.IGNORECASE)
@@ -234,7 +237,13 @@ def alta_ont(frame, slot, port, ontid, sn, desc, service_port):
             print("Salida final:\n", output)
             return output
     except Exception as e:
-        return f"Error al dar de alta ONT: {e} {estado} {resultado}"
+        traceback.print_exc()
+        if tn is not None:
+            try:
+                tn.close()
+            except Exception:
+                pass
+        return f"Error al dar de alta ONT: {e}"
 
 def consultar_potencia(conn, frame, slot, port, ontid):
     try:
@@ -950,6 +959,7 @@ def get_potencia():
 
 
 def alta_ont_versiontwo(frame, slot, port, ontid, sn, desc, service_port):
+    tn = None
     try:
         tipo = 'alta_onu_version_two'
         PATRON_CR = re.compile(r"{\s*<cr>.*?}", re.IGNORECASE)
@@ -1158,9 +1168,13 @@ def alta_ont_versiontwo(frame, slot, port, ontid, sn, desc, service_port):
             # print("Salida final:\n", output)
             # return output
     except Exception as e:
-        print("Error:", e.with_traceback())
-        tn.close()
-        return f"Error al dar de alta ONT: {e} {estado} {resultado}"
+        traceback.print_exc()
+        if tn is not None:
+            try:
+                tn.close()
+            except Exception:
+                pass
+        return f"Error al dar de alta ONT: {e}"
 
 def extraer_onus(texto):
     onus = []
@@ -1408,6 +1422,7 @@ def send_cmd_telnet_add_onu_two(tn,cmd):
         return True, out
  
 def alta_ont_version_three(frame, slot, port, ontid, sn, desc, service_port):
+    tn = None
     try:
         tipo = 'alta_onu_version_three'
         PATRON_CR = re.compile(r"{\s*<cr>.*?}", re.IGNORECASE)
@@ -1649,12 +1664,16 @@ def alta_ont_version_three(frame, slot, port, ontid, sn, desc, service_port):
                     #                             return out
                         
     except Exception as e:
-        print("Error:", e)
         traceback.print_exc()
-        tn.close()
-        return f"Error al dar de alta ONT: {e} {estado} {resultado}"
+        if tn is not None:
+            try:
+                tn.close()
+            except Exception:
+                pass
+        return f"Error al dar de alta ONT: {e}"
 
 def alta_ont_version_three_ma(frame, slot, port, ontid, sn, desc, service_port):
+    tn = None
     try:
         tipo = 'alta_onu_version_three_ma'
         PATRON_CR = re.compile(r"{\s*<cr>.*?}", re.IGNORECASE)
@@ -1763,8 +1782,12 @@ def alta_ont_version_three_ma(frame, slot, port, ontid, sn, desc, service_port):
     except Exception as e:
         print("Error:", e)
         traceback.print_exc()
-        tn.close()
-        return f"Error al dar de alta ONT MA: {e} {estado} {resultado}"
+        if tn is not None:
+            try:
+                tn.close()
+            except Exception:
+                pass
+        return None, f"Error al dar de alta ONT MA: {e}"
 
 def insert_onu_table(card_id, slot_id, port_id, ont_id, sn, description, olt='EA'):
     conn = sqlite3.connect(DATABASE)
