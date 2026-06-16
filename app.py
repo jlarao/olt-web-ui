@@ -358,32 +358,37 @@ def logout():
 @app.route("/guardar_datos", methods = ["POST"])
 @login_required
 def guardar_datos():
-    conn,estado, resultado = conectar()
+    conn, estado, resultado = conectar()
     print(estado)
     if estado == "error":
-        flash("Error " + conn)
+        flash("Error " + str(conn))
         return redirect(url_for("dashboard"))
+
+    conn.write(b"enable\n")
+    conn.write(b"config\n")
+    datos = descargar_config(conn)  # cierra conn internamente en su bloque finally
+    time.sleep(10)
+    if datos:
+        guardar_sqlite(datos, "current")
+        flash("Datos guardados correctamente")
     else:
-        conn.write(b"enable\n")
-        conn.write(b"config\n")
-        datos = descargar_config(conn)
-        time.sleep(10)
-        if datos:
-            guardar_sqlite(datos,"current")
-            flash("Datos guardados correctamente")
-        else:
-            flash("No se pudieron guardar los datos")
+        flash("No se pudieron guardar los datos")
 
-        datos = consultar_potencia(conn, 0,1,0,0)    
-        if datos:
-            guardar_sqlite(datos,"ont")
-            flash("Datos guardados correctamente")
+    # descargar_config cerró la conexión; abrir una nueva para consultar_potencia
+    conn2, estado2, _ = conectar()
+    if estado2 == "error":
+        flash("Error al reconectar para datos ONT")
+    else:
+        conn2.write(b"enable\n")
+        conn2.write(b"config\n")
+        datos2 = consultar_potencia(conn2, 0, 1, 0, 0)  # cierra conn2 internamente
+        if datos2:
+            guardar_sqlite(datos2, "ont")
+            flash("Datos ONT guardados correctamente")
         else:
-            flash("No se pudieron guardar los datos")
-        
-        conn.close()
+            flash("No se pudieron guardar los datos ONT")
 
-        return redirect(url_for("dashboard"))
+    return redirect(url_for("dashboard"))
 @app.route("/service_port", methods = ["GET"])
 # @login_required
 def service_port():
@@ -553,30 +558,21 @@ def alta_ont_web_v3():
         #     "profile": profile
         # })
         tn, resultado = alta_ont_version_three(frame, slot, port, ontid, sn, desc, sp)
-        # valores = alta_ont_version_three(frame, slot, port, ontid, sn, desc, sp)
-        # print(valores)
-        # return
-        # resultado = 'Success';
-        user = to_camel_case(desc)
-        # response = provision_device_dynamic(
-        #     serial_target=sn,
-        #     pppoe_user=pppoe,
-        #     pppoe_pass=PASSWORD_PPPOE,
-        #     vlan=VLAN,
-        #     tag=user,
-        #     provision_name="crear_pppoe_vlan100",
-        #     host=SERVER_ACS
-        # )
-        print("Salida Guardando...")                    
 
+        if tn is None or "Error" in str(resultado) or "Failure" in str(resultado) or "failure" in str(resultado):
+            if tn is not None:
+                try:
+                    tn.close()
+                except Exception:
+                    pass
+            return render_template("resultado_alta_v2.html", resultado=resultado)
+
+        print("Salida Guardando...")
         time.sleep(10)
-        # tn.write(b"save\r\n")
-        cmd = f"save\r\n"    
-        # cmd = "save\r\n";
+        cmd = f"save\r\n"
         r, out = send_cmd_telnet_add_onu_two(tn, cmd)
         time.sleep(0.3)
-        # out = tn.read_very_eager().decode("utf-8",errors="ignore")
-        print("Salida final:\n", out)                    
+        print("Salida final:\n", out)
         print(repr(out))
         tn.close()
         #alta pppoe
@@ -608,7 +604,12 @@ def alta_ont_web_v4(sn):
         desc = request.form["desc"]
         sp = request.form["sp"]
 
-        resultado = alta_ont_version_three(frame, slot, port, ontid, sn, desc, sp)
+        tn, resultado = alta_ont_version_three(frame, slot, port, ontid, sn, desc, sp)
+        if tn is not None:
+            try:
+                tn.close()
+            except Exception:
+                pass
 
         return render_template("resultado_alta_v2.html", resultado=resultado)
 
@@ -1163,6 +1164,6 @@ if __name__ == "__main__":
     # start_streamlit()
     local_dev = os.getenv("LOCAL_DEV", "false").lower() == "true"
     if local_dev:
-        app.run(host="0.0.0.0", port=8080, debug=True)
+        app.run(host="0.0.0.0", port=8080, debug=True, threaded=True)
     else:
-        app.run(host="0.0.0.0", port=8080, ssl_context=("fullchain.pem","privkey.pem"), debug=False)
+        app.run(host="0.0.0.0", port=8080, ssl_context=("fullchain.pem","privkey.pem"), debug=False, threaded=True)

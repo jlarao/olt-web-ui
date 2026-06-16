@@ -139,8 +139,8 @@ def alta_ont(frame, slot, port, ontid, sn, desc, service_port):
         tn,estado, resultado = conectar()
         print(estado)
         if estado == "error":
-            print("Error " + tn)
-            return redirect(url_for("dashboard"))
+            print("Error " + str(tn))
+            return f"Error de conexión al OLT: {resultado}"
         else:
             tn.write(b"enable\n")
             tn.write(b"config\n")
@@ -149,7 +149,7 @@ def alta_ont(frame, slot, port, ontid, sn, desc, service_port):
 
 
             interface_cmd = f"interface gpon {frame}/{slot}\n"
-            
+
             add_ont_cmd = (
                 f'ont add {port} {ontid} sn-auth "{sn}" omci '
                 f'ont-lineprofile-id {LINE_PROFILE_TRANSPARENT} ont-srvprofile-id {SRV_PROFILE_TRANSPARENT} '
@@ -563,74 +563,34 @@ def extraer_service_ports(texto):
     return bloques
 
 def delete_sp(sp):
-    tn,estado, resultado = conectar()
+    tn, estado, resultado = conectar()
     print(estado)
     if estado == "error":
-        print("Error " + tn)
+        print("Error " + str(tn))
         return "Conexion cerrada"
-    else:
+    try:
         tn.write(b"enable\n")
         tn.write(b"config\n")
         if isinstance(tn, str):
-            return tn  # error de conexión
+            return tn
 
-        # interface_cmd = f"undo service-port {sp}\r\n"
-        # time.sleep(0.3)
-        # tn.write(interface_cmd.encode("ascii"))
-        # time.sleep(1)
-        # print(interface_cmd)
-        # out = tn.read_very_eager().decode("utf-8",errors="ignore")
-        
-        # print(repr(out))
-
-        # texto = "Service virtual port does not exist"
-        # PATRON_ERROR_SP = re.compile(
-        #     r"(Failure.*?|Service virtual port does not exist(?:\s+(\d+))?)",
-        #     re.IGNORECASE | re.DOTALL
-        # )
-        # match = PATRON_ERROR_SP.search(out)
-        # if match:
-        #     print("✅ Detectado:", match.group(0))
-        #     tn.close()
-        #     return texto
-
-        res,txt = undo_service_port(tn, sp)
+        res, txt = undo_service_port(tn, sp)
 
         if res == True:
-           tn.close()
-           conn = sqlite3.connect(DATABASE)    
-           c = conn.cursor()
-           c.execute("UPDATE service_ports set deleted = 1 WHERE service_port = ?", (sp,))
-           conn.commit()
-           conn.close()
+            conn = sqlite3.connect(DATABASE)
+            c = conn.cursor()
+            c.execute("UPDATE service_ports set deleted = 1 WHERE service_port = ?", (sp,))
+            conn.commit()
+            conn.close()
 
-           return txt
-        
-
-        
-        # datos = descargar_config(tn)
-        # time.sleep(0.5)
-        # if datos:
-        #     guardar_sqlite(datos,"current")
-        #     print("Datos guardados correctamente")
-        # else:
-        #     print("No se pudieron guardar los datos")
-
-        # time.sleep(0.5)
-        # datos = consultar_potencia(tn, 0,1,0,0)    
-        # if datos:
-        #     guardar_sqlite(datos,"ont")
-
-        # time.sleep(10)
-        # tn.write(b"save\r\n")
-        # time.sleep(0.3)
-        # out = tn.read_very_eager().decode("utf-8",errors="ignore")
-        # print("Salida final:\n", out)                    
-        # print(repr(out))
-        # guardar_sqlite(out, 'delete_sp')
-
-        tn.close()
         return txt
+    except Exception as e:
+        return f"Error al borrar service-port: {e}"
+    finally:
+        try:
+            tn.close()
+        except Exception:
+            pass
         
 def undo_service_port(tn, sp):
     interface_cmd = f"undo service-port {sp}\r\n"
@@ -714,27 +674,33 @@ def delete_ont_sp():
             print('delete ont')
 
 def delete_ont_cont(frame, slot, port, ontid):
-    tn,estado, resultado = conectar()
+    tn, estado, resultado = conectar()
     print(estado)
     if estado == "error":
-        print("Error " + tn)
+        print("Error " + str(tn))
         return "Conexion cerrada"
-    else:
+    try:
         tn.write(b"enable\n")
         tn.write(b"config\n")
         if isinstance(tn, str):
-            return tn  # error de conexión
-        
-        result,txt = delete_only_str(tn,frame, slot, port, ontid)
-        if(result == True):
-            tn.close()
-            conn = sqlite3.connect(DATABASE)    
+            return tn
+
+        result, txt = delete_only_str(tn, frame, slot, port, ontid)
+        if result == True:
+            conn = sqlite3.connect(DATABASE)
             c = conn.cursor()
             c.execute("UPDATE onus set deleted = 1 WHERE card_id = ? AND slot_id = ? AND port_id = ? AND ont_id = ?", (frame, slot, port, ontid))
             conn.commit()
             conn.close()
 
-    return result,txt     
+        return result, txt
+    except Exception as e:
+        return False, f"Error al borrar ONT: {e}"
+    finally:
+        try:
+            tn.close()
+        except Exception:
+            pass
 
 def guardar_tabla():
     raw_text = obtener_ultimo_config()
@@ -968,8 +934,8 @@ def alta_ont_versiontwo(frame, slot, port, ontid, sn, desc, service_port):
         tn,estado, resultado = conectar()
         # print(estado)
         if estado == "error":
-            print("Error " + tn)
-            return redirect(url_for("dashboard"))
+            print("Error " + str(tn))
+            return f"Error de conexión al OLT: {resultado}"
         else:
             tn.write(b"enable\n")
             tn.write(b"config\n")
@@ -1277,25 +1243,24 @@ def delete_ont_sn(sn):
             delete_sp(sp[0])
             time.sleep(0.5)
 
-        conn = sqlite3.connect(DATABASE)
-        c = conn.cursor()
-        c.execute("SELECT card_id, slot_id, port_id, ont_id  FROM onus where SN = ? and deleted = 0 ORDER BY id DESC LIMIT 1" , (sn,))
-        row = c.fetchone()
-        conn.close()
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute("SELECT card_id, slot_id, port_id, ont_id FROM onus where SN = ? and deleted = 0 ORDER BY id DESC LIMIT 1", (sn,))
+    row = c.fetchone()
+    conn.close()
 
-            # delete_ont_db(sn)
-        if row:
-            card_id, slot_id, port_id, ont_id = row
-            result, texto = delete_ont_cont(card_id, slot_id, port_id, ont_id)
-            return result, texto
+    if row:
+        card_id, slot_id, port_id, ont_id = row
+        result, texto = delete_ont_cont(card_id, slot_id, port_id, ont_id)
+        return result, texto
 
 def delete_sp_ma(sp):
     tn, estado, resultado = conectar_ma()
     print(estado)
     if estado == "error":
-        print("Error " + tn)
+        print("Error " + str(tn))
         return "Conexion cerrada"
-    else:
+    try:
         tn.write(b"enable\n")
         tn.write(b"config\n")
         if isinstance(tn, str):
@@ -1304,24 +1269,28 @@ def delete_sp_ma(sp):
         res, txt = undo_service_port(tn, sp)
 
         if res == True:
-            tn.close()
             conn = sqlite3.connect(DATABASE)
             c = conn.cursor()
             c.execute("UPDATE service_ports set deleted = 1 WHERE service_port = ?", (sp,))
             conn.commit()
             conn.close()
-            return txt
 
-        tn.close()
         return txt
+    except Exception as e:
+        return f"Error al borrar service-port MA: {e}"
+    finally:
+        try:
+            tn.close()
+        except Exception:
+            pass
 
 def delete_ont_cont_ma(frame, slot, port, ontid):
     tn, estado, resultado = conectar_ma()
     print(estado)
     if estado == "error":
-        print("Error " + tn)
+        print("Error " + str(tn))
         return "Conexion cerrada"
-    else:
+    try:
         tn.write(b"enable\n")
         tn.write(b"config\n")
         if isinstance(tn, str):
@@ -1329,14 +1298,20 @@ def delete_ont_cont_ma(frame, slot, port, ontid):
 
         result, txt = delete_only_str(tn, frame, slot, port, ontid)
         if result == True:
-            tn.close()
             conn = sqlite3.connect(DATABASE)
             c = conn.cursor()
             c.execute("UPDATE onus set deleted = 1 WHERE card_id = ? AND slot_id = ? AND port_id = ? AND ont_id = ?", (frame, slot, port, ontid))
             conn.commit()
             conn.close()
 
-    return result, txt
+        return result, txt
+    except Exception as e:
+        return False, f"Error al borrar ONT MA: {e}"
+    finally:
+        try:
+            tn.close()
+        except Exception:
+            pass
 
 def delete_ont_sn_ma(sn):
     items = buscar_sp_ont_sn(sn)
@@ -1347,16 +1322,16 @@ def delete_ont_sn_ma(sn):
             delete_sp_ma(sp[0])
             time.sleep(0.5)
 
-        conn = sqlite3.connect(DATABASE)
-        c = conn.cursor()
-        c.execute("SELECT card_id, slot_id, port_id, ont_id FROM onus where SN = ? and deleted = 0 ORDER BY id DESC LIMIT 1", (sn,))
-        row = c.fetchone()
-        conn.close()
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute("SELECT card_id, slot_id, port_id, ont_id FROM onus where SN = ? and deleted = 0 ORDER BY id DESC LIMIT 1", (sn,))
+    row = c.fetchone()
+    conn.close()
 
-        if row:
-            card_id, slot_id, port_id, ont_id = row
-            result, texto = delete_ont_cont_ma(card_id, slot_id, port_id, ont_id)
-            return result, texto
+    if row:
+        card_id, slot_id, port_id, ont_id = row
+        result, texto = delete_ont_cont_ma(card_id, slot_id, port_id, ont_id)
+        return result, texto
 
 def send_cmd_telnet_add_onu(tn,cmd):
     tn.write(cmd.encode("ascii") + b"\r\n")
@@ -1385,6 +1360,10 @@ def send_cmd_telnet_add_onu(tn,cmd):
             return False, out
         elif re.search(r"PortID\s*:\s*\d+,\s*ONTID\s*:\s*\d+", out):
             return True, out
+        # Respuesta inesperada del OLT después del ENTER
+        return False, out
+    # El OLT no devolvió el prompt {<cr>} esperado
+    return False, out
 
 
 def send_cmd_telnet_add_onu_two(tn,cmd):
@@ -1430,8 +1409,8 @@ def alta_ont_version_three(frame, slot, port, ontid, sn, desc, service_port):
         tn,estado, resultado = conectar()
         print(estado)
         if estado == "error":
-            print("Error ")
-            return redirect(url_for("dashboard"))
+            print("Error " + str(resultado))
+            return None, f"Error de conexión al OLT: {resultado}"
         else:
             tn.write(b"enable\n")
             tn.write(b"config\n")
@@ -1441,7 +1420,7 @@ def alta_ont_version_three(frame, slot, port, ontid, sn, desc, service_port):
 
 
             interface_cmd = f"interface gpon {frame}/{slot}\n"
-            
+
             add_ont_cmd = (
                 f'ont add {port} {ontid} sn-auth "{sn}" omci '
                 f'ont-lineprofile-id {LINE_PROFILE_V2} ont-srvprofile-id {SRV_PROFILE_V2} '
@@ -1450,7 +1429,7 @@ def alta_ont_version_three(frame, slot, port, ontid, sn, desc, service_port):
 
             add_ont_cmd_two = (
                 f'ont ipconfig {port} {ontid} dhcp'
-                f' vlan {VLAN_TR} priority 5'                
+                f' vlan {VLAN_TR} priority 5'
             )
 
             add_ont_cmd_three = (
@@ -1670,7 +1649,7 @@ def alta_ont_version_three(frame, slot, port, ontid, sn, desc, service_port):
                 tn.close()
             except Exception:
                 pass
-        return f"Error al dar de alta ONT: {e}"
+        return None, f"Error al dar de alta ONT: {e}"
 
 def alta_ont_version_three_ma(frame, slot, port, ontid, sn, desc, service_port):
     tn = None
@@ -1681,8 +1660,8 @@ def alta_ont_version_three_ma(frame, slot, port, ontid, sn, desc, service_port):
         tn, estado, resultado = conectar_ma()
         print(estado)
         if estado == "error":
-            print("Error ")
-            return redirect(url_for("dashboard"))
+            print("Error " + str(resultado))
+            return None, f"Error de conexión al OLT MA: {resultado}"
         else:
             tn.write(b"enable\n")
             tn.write(b"config\n")
