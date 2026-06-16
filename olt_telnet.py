@@ -579,7 +579,7 @@ def delete_sp(sp):
         if res == True:
             conn = sqlite3.connect(DATABASE)
             c = conn.cursor()
-            c.execute("UPDATE service_ports set deleted = 1 WHERE service_port = ?", (sp,))
+            c.execute("UPDATE service_ports set deleted = 1 WHERE service_port = ? AND olt = 'EA'", (sp,))
             conn.commit()
             conn.close()
 
@@ -689,7 +689,7 @@ def delete_ont_cont(frame, slot, port, ontid):
         if result == True:
             conn = sqlite3.connect(DATABASE)
             c = conn.cursor()
-            c.execute("UPDATE onus set deleted = 1 WHERE card_id = ? AND slot_id = ? AND port_id = ? AND ont_id = ?", (frame, slot, port, ontid))
+            c.execute("UPDATE onus set deleted = 1 WHERE card_id = ? AND slot_id = ? AND port_id = ? AND ont_id = ? AND olt = 'MA'", (frame, slot, port, ontid))
             conn.commit()
             conn.close()
 
@@ -1223,14 +1223,14 @@ def delete_ont_db(sn):
     conn.commit()
     conn.close()
 
-def buscar_sp_ont_sn(sn):
+def buscar_sp_ont_sn(sn, olt='EA'):
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
-    c.execute("""select sp.service_port 
-        from onus 
-        join service_ports sp  on sp.card_id = onus.card_id  and sp.slot_id = onus.slot_id  and sp.port_id = onus.port_id  and sp.ont_id = onus.ont_id AND  sp.deleted = 0
-        where onus.deleted = 0 and  SN  = ? 
-    """, (sn,))
+    c.execute("""select sp.service_port
+        from onus
+        join service_ports sp  on sp.card_id = onus.card_id  and sp.slot_id = onus.slot_id  and sp.port_id = onus.port_id  and sp.ont_id = onus.ont_id AND  sp.deleted = 0 AND sp.olt = ?
+        where onus.deleted = 0 and  SN  = ? AND onus.olt = ?
+    """, (olt, sn, olt))
     sp = c.fetchall()
     conn.close()
     return sp
@@ -1245,7 +1245,7 @@ def delete_ont_sn(sn):
 
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
-    c.execute("SELECT card_id, slot_id, port_id, ont_id FROM onus where SN = ? and deleted = 0 ORDER BY id DESC LIMIT 1", (sn,))
+    c.execute("SELECT card_id, slot_id, port_id, ont_id FROM onus where SN = ? and deleted = 0  AND olt = 'EA'  ORDER BY id DESC LIMIT 1", (sn,))
     row = c.fetchone()
     conn.close()
 
@@ -1271,7 +1271,7 @@ def delete_sp_ma(sp):
         if res == True:
             conn = sqlite3.connect(DATABASE)
             c = conn.cursor()
-            c.execute("UPDATE service_ports set deleted = 1 WHERE service_port = ?", (sp,))
+            c.execute("UPDATE service_ports set deleted = 1 WHERE service_port = ? AND olt = 'MA'", (sp,))
             conn.commit()
             conn.close()
 
@@ -1300,7 +1300,7 @@ def delete_ont_cont_ma(frame, slot, port, ontid):
         if result == True:
             conn = sqlite3.connect(DATABASE)
             c = conn.cursor()
-            c.execute("UPDATE onus set deleted = 1 WHERE card_id = ? AND slot_id = ? AND port_id = ? AND ont_id = ?", (frame, slot, port, ontid))
+            c.execute("UPDATE onus set deleted = 1 WHERE card_id = ? AND slot_id = ? AND port_id = ? AND ont_id = ? AND olt = 'MA'", (frame, slot, port, ontid))
             conn.commit()
             conn.close()
 
@@ -1314,7 +1314,7 @@ def delete_ont_cont_ma(frame, slot, port, ontid):
             pass
 
 def delete_ont_sn_ma(sn):
-    items = buscar_sp_ont_sn(sn)
+    items = buscar_sp_ont_sn(sn, olt='MA')
     print("items:", items)
     if items:
         for sp in items:
@@ -1324,7 +1324,7 @@ def delete_ont_sn_ma(sn):
 
     conn = sqlite3.connect(DATABASE)
     c = conn.cursor()
-    c.execute("SELECT card_id, slot_id, port_id, ont_id FROM onus where SN = ? and deleted = 0 ORDER BY id DESC LIMIT 1", (sn,))
+    c.execute("SELECT card_id, slot_id, port_id, ont_id FROM onus where SN = ? and deleted = 0 AND olt = 'MA' ORDER BY id DESC LIMIT 1", (sn,))
     row = c.fetchone()
     conn.close()
 

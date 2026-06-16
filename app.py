@@ -1161,7 +1161,7 @@ def getpotencia():
     # return result
     return render_template("get_potencia.html", records = r_onts)
 if __name__ == "__main__":
-    # start_streamlit()
+    start_streamlit()
     local_dev = os.getenv("LOCAL_DEV", "false").lower() == "true"
     if local_dev:
         app.run(host="0.0.0.0", port=8080, debug=True, threaded=True)
