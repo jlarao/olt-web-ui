@@ -88,8 +88,7 @@ USERNAME_MKT = os.getenv("USERNAME_MKT", "admin")
 PASSWORD_MKT =  os.getenv("PASSWORD_MKT", "admin")
 SERVER_ACS = os.getenv("SERVER_ACS", "192.168.1.7:7557")
 PWD_INSERT_OLT = os.getenv("PWD_INSERT_OLT", "")
-STREAMLIT_PORT        = int(os.getenv("STREAMLIT_PORT", "8502"))        # puerto interno (nginx expone 8501)
-STREAMLIT_NGINX_PORT  = int(os.getenv("STREAMLIT_NGINX_PORT", "8501"))   # puerto público (nginx con SSL)
+STREAMLIT_PORT = int(os.getenv("STREAMLIT_PORT", "8501"))
 STREAMLIT_PUBLIC_URL = os.getenv("STREAMLIT_PUBLIC_URL", "")  # si se define, sobreescribe la URL del iframe
 
 # ── Streamlit subprocess ──────────────────────────────────────────────────────
@@ -102,7 +101,13 @@ def start_streamlit():
         logging.warning("Dashboard Streamlit no encontrado en %s", dashboard_path)
         return
 
-    # Streamlit corre en HTTP puro; nginx (puerto STREAMLIT_NGINX_PORT) termina el SSL
+    local_dev = os.getenv("LOCAL_DEV", "false").lower() == "true"
+    base_dir  = os.path.dirname(os.path.abspath(__file__))
+    ssl_cert  = os.path.join(base_dir, "fullchain.pem")
+    ssl_key   = os.path.join(base_dir, "privkey.pem")
+    use_ssl   = (not local_dev) and os.path.exists(ssl_cert) and os.path.exists(ssl_key)
+    base_path = "" if local_dev else os.getenv("STREAMLIT_BASE_PATH", "/noc-dash")
+
     cmd = [
         sys.executable, "-m", "streamlit", "run", dashboard_path,
         "--server.port",                 str(STREAMLIT_PORT),
@@ -111,6 +116,10 @@ def start_streamlit():
         "--server.enableXsrfProtection", "false",
         "--browser.gatherUsageStats",    "false",
     ]
+    if use_ssl:
+        cmd += ["--server.sslCertFile", ssl_cert, "--server.sslKeyFile", ssl_key]
+    if base_path:
+        cmd += ["--server.baseUrlPath", base_path]
 
     _streamlit_proc = subprocess.Popen(
         cmd,
@@ -1139,7 +1148,6 @@ if __name__ == "__main__":
     start_streamlit()
     local_dev = os.getenv("LOCAL_DEV", "false").lower() == "true"
     if local_dev:
-        # Sin SSL para pruebas locales: http://localhost:8080
         app.run(host="0.0.0.0", port=8080, debug=True)
     else:
         app.run(host="0.0.0.0", port=8080, ssl_context=("fullchain.pem","privkey.pem"), debug=False)
