@@ -6,3 +6,4 @@ requests
 gspread
 oauth2client
 routeros_api
+paramiko

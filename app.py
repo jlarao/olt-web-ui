@@ -1160,6 +1160,82 @@ def getpotencia():
     result = json.dumps(r_onts[0])    
     # return result
     return render_template("get_potencia.html", records = r_onts)
+
+# ─── Network Scanner ──────────────────────────────────────────────────────────
+
+@app.route('/network-scan')
+@login_required
+def network_scan():
+    return render_template('network_scan.html')
+
+
+@app.route('/api/network-scan', methods=['POST'])
+@login_required
+def api_network_scan():
+    from scanner.orchestrator import run_scan
+    data = request.get_json(silent=True) or {}
+    mkt_host = data.get('host') or None
+    mkt_port = int(data.get('port') or 0) or None
+    mkt_user = data.get('user') or None
+    mkt_pass = data.get('password') or None
+    listen_sec = int(data.get('listen_sec', 5))
+    neighbors_only = bool(data.get('neighbors_only', True))
+    try:
+        result = run_scan(
+            mkt_host=mkt_host,
+            mkt_port=mkt_port,
+            mkt_user=mkt_user,
+            mkt_pass=mkt_pass,
+            listen_sec=listen_sec,
+            neighbors_only=neighbors_only,
+        )
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Error en /api/network-scan: {e}")
+        return jsonify({'error': str(e), 'devices': [], 'stats': {}, 'errors': [str(e)]}), 500
+
+
+@app.route('/api/ping', methods=['POST'])
+@login_required
+def api_ping():
+    from scanner.mikrotik_ssh import connect, run_command
+    data = request.get_json(silent=True) or {}
+    target_ip = data.get('ip', '').strip()
+    if not target_ip:
+        return jsonify({'error': 'IP requerida'}), 400
+
+    mkt_host = data.get('host') or os.getenv('M1_HOST', '')
+    mkt_port = int(data.get('port') or os.getenv('M1_PORT', 12222))
+    mkt_user = data.get('user') or os.getenv('M1_USER', '')
+    mkt_pass = data.get('password') or os.getenv('M1_PASS', '')
+
+    try:
+        client = connect(mkt_host, mkt_port, mkt_user, mkt_pass)
+        raw = run_command(client, f'/ping {target_ip} count=4 interval=200ms', timeout=15)
+        client.close()
+        # Extraer estadísticas de la última línea
+        import re
+        stats_m = re.search(
+            r'sent=(\d+)\s+received=(\d+)\s+packet-loss=(\d+)%'
+            r'(?:\s+min-rtt=(\S+)\s+avg-rtt=(\S+)\s+max-rtt=(\S+))?',
+            raw
+        )
+        stats = {}
+        if stats_m:
+            stats = {
+                'sent':     int(stats_m.group(1)),
+                'received': int(stats_m.group(2)),
+                'loss':     int(stats_m.group(3)),
+                'min':      stats_m.group(4) or '',
+                'avg':      stats_m.group(5) or '',
+                'max':      stats_m.group(6) or '',
+            }
+        return jsonify({'output': raw, 'ip': target_ip, 'stats': stats})
+    except Exception as e:
+        logger.error(f"Error en /api/ping {target_ip}: {e}")
+        return jsonify({'error': str(e), 'ip': target_ip}), 500
+
+
 if __name__ == "__main__":
     start_streamlit()
     local_dev = os.getenv("LOCAL_DEV", "false").lower() == "true"
