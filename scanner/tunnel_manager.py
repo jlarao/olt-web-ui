@@ -24,6 +24,11 @@ logger = logging.getLogger(__name__)
 logging.getLogger('paramiko').setLevel(logging.WARNING)
 logging.getLogger('paramiko.transport').setLevel(logging.ERROR)
 
+
+def _env_bool(name: str, default: str = '1') -> bool:
+    return os.getenv(name, default).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
 # Credenciales por defecto (MikroTik #1) — usadas si no hay sesión activa
 _M1_HOST = os.getenv('M1_HOST', '')
 _M1_PORT = int(os.getenv('M1_PORT', 12222))
@@ -32,6 +37,11 @@ _M1_PASS = os.getenv('M1_PASS', '')
 
 TIMEOUT_MIN = int(os.getenv('TUNNEL_IDLE_TIMEOUT_MIN', '30'))  # minutos de inactividad antes de cerrar el túnel
 SSH_CONNECT_TIMEOUT = float(os.getenv('TUNNEL_SSH_CONNECT_TIMEOUT', '20'))
+SSH_KEEPALIVE_SEC = int(os.getenv('TUNNEL_SSH_KEEPALIVE_SEC', '0'))
+TCP_KEEPALIVE = _env_bool('TUNNEL_TCP_KEEPALIVE', '1')
+TCP_KEEPIDLE_SEC = int(os.getenv('TUNNEL_TCP_KEEPIDLE_SEC', '30'))
+TCP_KEEPINTVL_SEC = int(os.getenv('TUNNEL_TCP_KEEPINTVL_SEC', '10'))
+TCP_KEEPCNT = int(os.getenv('TUNNEL_TCP_KEEPCNT', '3'))
 OPEN_CHANNEL_TIMEOUT = float(os.getenv('TUNNEL_OPEN_CHANNEL_TIMEOUT', '60'))
 TUNNEL_BIND_HOST = os.getenv('TUNNEL_BIND_HOST', '127.0.0.1')
 TUNNEL_PUBLIC_HOST = os.getenv('TUNNEL_PUBLIC_HOST', '127.0.0.1')
@@ -310,8 +320,11 @@ class TunnelManager:
             look_for_keys=False, allow_agent=False,
             timeout=SSH_CONNECT_TIMEOUT,
         )
-        # RouterOS no soporta SSH keepalive — no llamar set_keepalive()
         transport = client.get_transport()
+        if not transport:
+            client.close()
+            raise RuntimeError(f'No se pudo abrir transporte SSH hacia {ssh_host}:{ssh_port}')
+        self._configure_keepalive(transport, ssh_host, ssh_port)
         self._ssh_pool[hub_key] = {
             'client': client,
             'transport': transport,
@@ -325,6 +338,38 @@ class TunnelManager:
             return bool(transport and transport.is_active())
         except Exception:
             return False
+
+    def _configure_keepalive(self, transport, ssh_host, ssh_port) -> None:
+        if TCP_KEEPALIVE:
+            try:
+                sock = transport.sock
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                if hasattr(socket, 'TCP_KEEPIDLE'):
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPIDLE, TCP_KEEPIDLE_SEC)
+                if hasattr(socket, 'TCP_KEEPINTVL'):
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPINTVL, TCP_KEEPINTVL_SEC)
+                if hasattr(socket, 'TCP_KEEPCNT'):
+                    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_KEEPCNT, TCP_KEEPCNT)
+                if hasattr(socket, 'SIO_KEEPALIVE_VALS'):
+                    sock.ioctl(
+                        socket.SIO_KEEPALIVE_VALS,
+                        (1, TCP_KEEPIDLE_SEC * 1000, TCP_KEEPINTVL_SEC * 1000),
+                    )
+                logger.info(
+                    f"[ssh] TCP keepalive {ssh_host}:{ssh_port} "
+                    f"idle={TCP_KEEPIDLE_SEC}s interval={TCP_KEEPINTVL_SEC}s count={TCP_KEEPCNT}"
+                )
+            except Exception as e:
+                logger.warning(f"[ssh] No se pudo activar TCP keepalive {ssh_host}:{ssh_port} — {e}")
+
+        # RouterOS puede no aceptar keepalives SSH tipo Paramiko/OpenSSH.
+        # Por default queda apagado; el TCP keepalive de socket suele ser mas compatible.
+        if SSH_KEEPALIVE_SEC > 0:
+            try:
+                transport.set_keepalive(SSH_KEEPALIVE_SEC)
+                logger.info(f"[ssh] SSH keepalive {ssh_host}:{ssh_port} cada {SSH_KEEPALIVE_SEC}s")
+            except Exception as e:
+                logger.warning(f"[ssh] No se pudo activar SSH keepalive {ssh_host}:{ssh_port} — {e}")
 
     def _close_hub(self, hub_key) -> None:
         entry = self._ssh_pool.pop(hub_key, None)
