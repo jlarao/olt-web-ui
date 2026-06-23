@@ -189,6 +189,7 @@ class TunnelManager:
                 )
                 return {
                     'local_port': entry['tunnel'].local_port,
+                    'connect_to': self._connect_to(entry['tunnel'].local_port),
                     'public_host': TUNNEL_PUBLIC_HOST,
                     'public_url': self._public_url(entry['tunnel'].local_port, target_port),
                     'expires_in_sec': TIMEOUT_MIN * 60,
@@ -200,6 +201,7 @@ class TunnelManager:
                                       target_ip, target_port)
             return {
                 'local_port': local_port,
+                'connect_to': self._connect_to(local_port),
                 'public_host': TUNNEL_PUBLIC_HOST,
                 'public_url': self._public_url(local_port, target_port),
                 'expires_in_sec': TIMEOUT_MIN * 60,
@@ -219,6 +221,7 @@ class TunnelManager:
                     'port':       k[1],
                     'hub':        k[2],
                     'local_port': v['tunnel'].local_port,
+                    'connect_to': self._connect_to(v['tunnel'].local_port),
                     'public_host': TUNNEL_PUBLIC_HOST,
                     'public_url': self._public_url(v['tunnel'].local_port, k[1]),
                     'idle_sec':   int(time.time() - v['last_used']),
@@ -276,6 +279,9 @@ class TunnelManager:
     def _public_url(self, local_port: int, target_port: int) -> str:
         scheme = 'http' if int(target_port) == 80 else 'https'
         return f'{scheme}://{TUNNEL_PUBLIC_HOST}:{local_port}/'
+
+    def _connect_to(self, local_port: int) -> str:
+        return f'{TUNNEL_PUBLIC_HOST}:{local_port}'
 
     def _is_alive(self, tunnel) -> bool:
         if not tunnel or not tunnel.is_active:

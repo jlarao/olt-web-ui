@@ -1928,7 +1928,7 @@ def api_proxy_tunnel():
         local_port = tunnel['local_port']
         return jsonify({
             'local_port': local_port,
-            'connect_to': f'localhost:{local_port}',
+            'connect_to': tunnel.get('connect_to') or f'localhost:{local_port}',
             'public_host': tunnel.get('public_host'),
             'public_url': tunnel.get('public_url'),
             'expires_in_sec': tunnel.get('expires_in_sec'),
