@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
+from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify, Response
 from flask_login import LoginManager, login_user, login_required, logout_user, UserMixin
 from werkzeug.security import check_password_hash
 import sqlite3,time
@@ -12,8 +12,117 @@ import json
 from dotenv import load_dotenv
 from datetime import datetime
 import re
+import ssl as _ssl
 import unicodedata
+import threading as _threading
+import requests as _req
+import urllib3
+from urllib.parse import urljoin, urlparse
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+
+class _LenientSSLAdapter(_req.adapters.HTTPAdapter):
+    """
+    HTTPAdapter que acepta dispositivos UBNT con firmware antiguo:
+    TLS 1.0/1.1, cifradores débiles, certificados autofirmados.
+    """
+
+    def __init__(self, *args, **kwargs):
+        import warnings
+        ctx = _ssl.SSLContext(_ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode    = _ssl.CERT_NONE
+        ctx.set_ciphers('DEFAULT:@SECLEVEL=0')
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore', DeprecationWarning)
+                ctx.minimum_version = _ssl.TLSVersion.TLSv1
+        except AttributeError:
+            pass
+        try:
+            ctx.options |= getattr(_ssl, 'OP_LEGACY_SERVER_CONNECT', 0)
+        except Exception:
+            pass
+        try:
+            ctx.options |= getattr(_ssl, 'OP_IGNORE_UNEXPECTED_EOF', 0)
+        except Exception:
+            pass
+        try:
+            ctx.maximum_version = _ssl.TLSVersion.TLSv1_2
+        except AttributeError:
+            pass
+        self._ctx = ctx
+        super().__init__(*args, **kwargs)
+
+    def init_poolmanager(self, num_pools, maxsize, block=False, **kw):
+        kw['ssl_context'] = self._ctx
+        super().init_poolmanager(num_pools, maxsize, block=block, **kw)
+
+    def send(self, request, **kwargs):
+        # Forzar siempre verify=False; urllib3 puede ignorar el ctx.verify_mode
+        kwargs['verify'] = False
+        return super().send(request, **kwargs)
+
+
+# Pool de sesiones HTTP persistentes por túnel (ip, port) → Session.
+# Reutiliza la conexión HTTPS ya negociada; evita pagar el handshake SSL
+# (~500-800 ms) en cada petición de status.cgi/getcfg.cgi.
+_proxy_sessions: dict = {}
+_proxy_sessions_lock = _threading.Lock()
+
+def _new_proxy_session(pool_maxsize: int = 1) -> _req.Session:
+    s = _req.Session()
+    adapter = _LenientSSLAdapter(
+        pool_connections=1, pool_maxsize=pool_maxsize, max_retries=0,
+        pool_block=True,
+    )
+    s.mount('https://', adapter)
+    s.mount('http://',  adapter)
+    return s
+
+
+def _proxy_session(ip: str, port: int) -> _req.Session:
+    key = (ip, port)
+    with _proxy_sessions_lock:
+        if key not in _proxy_sessions:
+            _proxy_sessions[key] = _new_proxy_session(pool_maxsize=1)
+        return _proxy_sessions[key]
+
+
+def _drop_proxy_session(ip: str, port: int) -> None:
+    with _proxy_sessions_lock:
+        sess = _proxy_sessions.pop((ip, port), None)
+    if sess:
+        try:
+            sess.close()
+        except Exception:
+            pass
+
 load_dotenv()
+
+from scanner.tunnel_manager import tunnel_manager
+
+# Mapa hub_ip → credenciales SSH. Clave es el IP del router MikroTik hub.
+# Cuando llega una petición de WinBox con hub_ip, se busca aquí primero.
+_HUB_CREDS: dict[str, dict] = {}
+for _pfx in ('M1', 'M2', 'M3', 'M4'):
+    _h = os.getenv(f'{_pfx}_HOST', '')
+    if _h:
+        _HUB_CREDS[_h] = {
+            'port': int(os.getenv(f'{_pfx}_PORT', 12222)),
+            'user': os.getenv(f'{_pfx}_USER', 'admin'),
+            'pass': os.getenv(f'{_pfx}_PASS', ''),
+        }
+
+def _session_hub_creds() -> dict:
+    """Lee las credenciales SSH del hub MikroTik guardadas en la sesión.
+    Fallback a M1 del .env si no hay sesión activa (acceso directo sin scan previo)."""
+    return {
+        'host': session.get('hub_host') or os.getenv('M1_HOST', ''),
+        'port': session.get('hub_port') or int(os.getenv('M1_PORT', 12222)),
+        'user': session.get('hub_user') or os.getenv('M1_USER', 'admin'),
+        'pass': session.get('hub_pass') or os.getenv('M1_PASS', ''),
+    }
 
 def to_genieacs_tag(name):
     if not name:
@@ -90,6 +199,8 @@ SERVER_ACS = os.getenv("SERVER_ACS", "192.168.1.7:7557")
 PWD_INSERT_OLT = os.getenv("PWD_INSERT_OLT", "")
 STREAMLIT_PORT = int(os.getenv("STREAMLIT_PORT", "8501"))
 STREAMLIT_PUBLIC_URL = os.getenv("STREAMLIT_PUBLIC_URL", "")  # si se define, sobreescribe la URL del iframe
+PROXY_UPSTREAM_TIMEOUT = float(os.getenv("PROXY_UPSTREAM_TIMEOUT", "90"))
+PROXY_AJAX_TIMEOUT_MS = int(os.getenv("PROXY_AJAX_TIMEOUT_MS", "120000"))
 
 # ── Streamlit subprocess ──────────────────────────────────────────────────────
 _streamlit_proc = None
@@ -1180,6 +1291,15 @@ def api_network_scan():
     mkt_pass = data.get('password') or None
     listen_sec = int(data.get('listen_sec', 5))
     neighbors_only = bool(data.get('neighbors_only', True))
+
+    # Guardar credenciales del hub en sesión — las usa el proxy y WinBox
+    # para crear el túnel SSH sin necesidad de pasar credenciales en la URL.
+    if mkt_host:
+        session['hub_host'] = mkt_host
+        session['hub_port'] = mkt_port or int(os.getenv('M1_PORT', 12222))
+        session['hub_user'] = mkt_user or os.getenv('M1_USER', 'admin')
+        session['hub_pass'] = mkt_pass or os.getenv('M1_PASS', '')
+
     try:
         result = run_scan(
             mkt_host=mkt_host,
@@ -1234,6 +1354,599 @@ def api_ping():
     except Exception as e:
         logger.error(f"Error en /api/ping {target_ip}: {e}")
         return jsonify({'error': str(e), 'ip': target_ip}), 500
+
+
+# ── Proxy de dispositivos vía túnel SSH ───────────────────────────────────
+
+_HOP_BY_HOP = {
+    'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
+    'te', 'trailers', 'transfer-encoding', 'upgrade',
+    'content-encoding', 'content-length',
+}
+# Strip these from forwarded requests so the upstream always returns full bodies
+# (304 responses have no body — the interceptor script can't be injected).
+_STRIP_REQ = {'if-none-match', 'if-modified-since', 'if-match', 'if-unmodified-since', 'if-range'}
+
+
+def _proxy_prefix(ip, port):
+    return f'/proxy/{ip}/{port}'
+
+
+def _make_js_intercept(ip: str, port: int) -> str:
+    """
+    Script inyectado al inicio del <head>.
+    Intercepta TODAS las formas en que el browser carga recursos remotos:
+      fetch(), XHR, WebSocket — y la inyección dinámica de <script>/<link>
+      que usa Webpack para code-splitting (chunks cargados tras login).
+    """
+    prefix = _proxy_prefix(ip, port)
+    ip_re  = ip.replace('.', '\\\\.')   # 192\.168\.2\.180 para JS RegExp
+    ajax_timeout = PROXY_AJAX_TIMEOUT_MS
+    return (
+        '<script>'
+        '(function(){'
+
+        # ── función de reescritura central ────────────────────────────────
+        f'var P="{prefix}";'
+        f'var R=new RegExp("https?://{ip_re}(?::{port})?","g");'
+        'if(typeof window.__!=="function"){'
+          'window.__=function(s){return s==null?"":String(s);};'
+        '}'
+        'function rw(u){'
+          'if(typeof u!=="string"||!u)return u;'
+          'u=u.replace(R,P);'
+          'if(u.charAt(0)==="/"&&u.slice(0,7)!=="/proxy/")u=P+u;'
+          'return u;'
+        '}'
+
+        # ── fetch() ───────────────────────────────────────────────────────
+        'var _f=window.fetch;'
+        'window.fetch=function(u,o){return _f.call(this,rw(u),o);};'
+
+        # ── XMLHttpRequest ────────────────────────────────────────────────
+        'var _o=XMLHttpRequest.prototype.open;'
+        'XMLHttpRequest.prototype.open=function(){'
+          'var a=Array.from(arguments);a[1]=rw(a[1]);return _o.apply(this,a);'
+        '};'
+
+        # Extend jQuery Ajax timeouts for proxied CGI calls. Device UIs often
+        # assume LAN latency and abort status reloads too quickly over tunnels.
+        'function tuneJq(){'
+          'var $=window.jQuery||window.$;'
+          'if(!$||!$.ajax||$.__proxyTimeoutPatched)return false;'
+          '$.__proxyTimeoutPatched=true;'
+          'function isCgi(u){u=rw(u||"");return typeof u==="string"&&/\\.cgi(?:\\?|$)/.test(u);}'
+        'if($.ajaxPrefilter){'
+            '$.ajaxPrefilter(function(o){'
+              f'if(o&&isCgi(o.url))o.timeout=Math.max(Number(o.timeout)||0,{ajax_timeout});'
+            '});'
+          '}'
+          'var _ajax=$.ajax;'
+          '$.ajax=function(u,o){'
+            'var opt=typeof u==="string"?(o=o||{},o.url=u,o):(u||{});'
+            f'if(opt&&isCgi(opt.url))opt.timeout=Math.max(Number(opt.timeout)||0,{ajax_timeout});'
+            'return _ajax.apply(this,arguments);'
+          '};'
+          'return true;'
+        '}'
+        'if(!tuneJq()){'
+          'var _jqTimer=setInterval(function(){if(tuneJq())clearInterval(_jqTimer);},50);'
+          'setTimeout(function(){clearInterval(_jqTimer);},10000);'
+        '}'
+
+        # ── WebSocket ─────────────────────────────────────────────────────
+        'if(window.WebSocket){'
+          'var _W=window.WebSocket;'
+          'window.WebSocket=function(u,p){'
+            'u=rw(u).replace(/^wss:/,"ws:").replace(/^https:/,"ws:");'
+            'try{return new _W(u,p);}catch(e){console.warn("[proxy] WS:",e);}'
+          '};'
+          'Object.assign(window.WebSocket,_W);'
+        '}'
+
+        # ── Webpack code-splitting: <script src> y <link href> dinámicos ──
+        # Capa 1: wrappea setters de prototipo — intercepta asignaciones directas
+        # (link.href = x) antes de que el browser inicie la carga.
+        'function wrapSetter(proto,prop){'
+          'var d=Object.getOwnPropertyDescriptor(proto,prop);'
+          'if(!d||!d.configurable||!d.set)return;'
+          'Object.defineProperty(proto,prop,{'
+            'get:d.get,'
+            'set:function(v){d.set.call(this,rw(v));},'
+            'configurable:true,enumerable:d.enumerable'
+          '});'
+        '}'
+        'try{wrapSetter(HTMLScriptElement.prototype,"src");}catch(e){}'
+        'try{wrapSetter(HTMLLinkElement.prototype,"href");}catch(e){}'
+        'try{wrapSetter(HTMLImageElement.prototype,"src");}catch(e){}'
+
+        # ── setAttribute: fallback para loaders que usan setAttribute ─────────
+        'var _sa=Element.prototype.setAttribute;'
+        'Element.prototype.setAttribute=function(n,v){'
+          'if((n==="src"||n==="href")&&typeof v==="string")v=rw(v);'
+          'return _sa.call(this,n,v);'
+        '};'
+
+        # ── Capa 2: MutationObserver — red de seguridad para chunks Webpack ───
+        # Algunos builds usan Object.assign o acceso indirecto que escapa la
+        # capa 1. El observer reescribe href/src justo después de la inserción
+        # al DOM, antes de que el browser inicie el request de red.
+        'try{'
+          'new MutationObserver(function(ms){'
+            'ms.forEach(function(m){'
+              'm.addedNodes.forEach(function(n){'
+                'if(!n.tagName)return;'
+                'var t=n.tagName.toUpperCase();'
+                'if(t==="LINK"){var h=n.getAttribute("href");if(h&&h.indexOf("/proxy/")<0){var rh=rw(h);if(rh!==h)_sa.call(n,"href",rh);}}'
+                'else if(t==="SCRIPT"){var s=n.getAttribute("src");if(s&&s.indexOf("/proxy/")<0){var rs=rw(s);if(rs!==s)_sa.call(n,"src",rs);}}'
+              '});'
+              # también captura cambios de atributo en elementos ya en el DOM
+              'if(m.type==="attributes"&&m.target){'
+                'var el=m.target,at=m.attributeName;'
+                'if(at==="href"||at==="src"){'
+                  'var v=el.getAttribute(at);'
+                  'if(v&&v.indexOf("/proxy/")<0){var rv=rw(v);if(rv!==v)_sa.call(el,at,rv);}'
+                '}'
+              '}'
+            '});'
+          '}).observe(document.documentElement,{'
+            'childList:true,subtree:true,'
+            'attributes:true,attributeFilter:["href","src"]'
+          '});'
+        '}catch(e){}'
+
+        '})();'
+        '</script>'
+    )
+
+
+def _should_proxy_url(url: str) -> bool:
+    if not url:
+        return False
+    u = url.strip()
+    if not u or u.startswith(('#', '//', '/proxy/')):
+        return False
+    return not re.match(r'^[a-z][a-z0-9+.-]*:', u, flags=re.I)
+
+
+def _rewrite_url_value(url: str, ip: str, port: int, subpath: str = '') -> str:
+    if not _should_proxy_url(url):
+        return url
+
+    prefix = _proxy_prefix(ip, port)
+    if url.startswith('/'):
+        return prefix + url
+
+    base = '/' + (subpath or '')
+    if not base.endswith('/'):
+        base = base.rsplit('/', 1)[0] + '/'
+    return prefix + urljoin(base, url)
+
+
+def _rewrite_asset_urls(text: str, ip: str, port: int, subpath: str = '') -> str:
+    """
+    Reescribe URLs en HTML/CSS para que pasen por el proxy.
+    """
+    prefix = _proxy_prefix(ip, port)
+
+    # href/src/action relativos o absolutos del dispositivo.
+    text = re.sub(
+        r'((?:href|src|action)=")([^"]*)',
+        lambda m: m.group(1) + _rewrite_url_value(m.group(2), ip, port, subpath),
+        text,
+    )
+    text = re.sub(
+        r"((?:href|src|action)=')([^']*)",
+        lambda m: m.group(1) + _rewrite_url_value(m.group(2), ip, port, subpath),
+        text,
+    )
+    # content="/..." en meta refresh u otros casos donde content sea URL.
+    text = re.sub(
+        r'((?:content)=")(/[^"]*)',
+        lambda m: m.group(1) + _rewrite_url_value(m.group(2), ip, port, subpath),
+        text,
+    )
+    text = re.sub(
+        r"((?:content)=')(/[^']*)",
+        lambda m: m.group(1) + _rewrite_url_value(m.group(2), ip, port, subpath),
+        text,
+    )
+    # url(...) en CSS, incluyendo rutas relativas como url(login-unms.svg).
+    text = re.sub(
+        r'url\(\s*([\'"]?)([^)\'"]+)\1\s*\)',
+        lambda m: f'url({m.group(1)}{_rewrite_url_value(m.group(2).strip(), ip, port, subpath)}{m.group(1)})',
+        text,
+    )
+    # URLs absolutas del propio dispositivo
+    for scheme in ('https', 'http'):
+        text = text.replace(f'{scheme}://{ip}:{port}', prefix)
+        text = text.replace(f'{scheme}://{ip}',        prefix)
+
+    return text
+
+
+def _rewrite(text: str, ip: str, port: int, subpath: str = '') -> str:
+    """
+    Reescribe URLs en HTML e inyecta el interceptor JS en el <head>.
+    """
+    # Inyectar interceptor JS solo en HTML real. Los bundles JS pueden contener
+    # el texto "<head>" dentro de strings y se rompen si se inyecta ahi.
+    if '<head>' in text:
+        text = text.replace('<head>', '<head>' + _make_js_intercept(ip, port), 1)
+    elif '<HEAD>' in text:
+        text = text.replace('<HEAD>', '<HEAD>' + _make_js_intercept(ip, port), 1)
+
+    return _rewrite_asset_urls(text, ip, port, subpath)
+
+
+def _rewrite_location(location: str, ip: str, port: int) -> str:
+    prefix = _proxy_prefix(ip, port)
+    for scheme in ('https', 'http'):
+        for suffix in (f':{port}', ''):
+            base = f'{scheme}://{ip}{suffix}'
+            if location.startswith(base):
+                return prefix + location[len(base):]
+    if location.startswith('/'):
+        return prefix + location
+    return location
+
+
+def _rewrite_cookies(raw_cookies: list[str]) -> list[str]:
+    """Quita Secure y Domain de Set-Cookie para que el browser los acepte."""
+    out = []
+    for c in raw_cookies:
+        c = re.sub(r';\s*Secure', '', c, flags=re.I)
+        c = re.sub(r';\s*Domain=[^;]+', '', c, flags=re.I)
+        c = re.sub(r';\s*SameSite=[^;]+', '', c, flags=re.I)
+        out.append(c)
+    return out
+
+
+def _proxy_target_from_referer(asset_path: str):
+    ref = request.headers.get('Referer', '')
+    ref_path = urlparse(ref).path if ref else ''
+    m = re.match(r'^/proxy/([^/]+)/(\d+)(?:/.*)?$', ref_path)
+    if not m:
+        return None
+
+    target = f'/proxy/{m.group(1)}/{m.group(2)}/{asset_path}'
+    if request.query_string:
+        target += '?' + request.query_string.decode('utf-8', errors='replace')
+    return target
+
+
+@app.route('/images/<path:asset>', methods=['GET', 'HEAD'])
+@login_required
+def proxy_referred_image(asset):
+    target = _proxy_target_from_referer(f'images/{asset}')
+    if target:
+        return redirect(target, code=302)
+    return ('Not found', 404)
+
+
+_PROXY_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']
+_PROXY_RETRY_METHODS = {'GET', 'HEAD', 'OPTIONS'}
+_PROXY_STATIC_EXTS = (
+    '.css', '.js', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico',
+    '.woff', '.woff2', '.ttf', '.eot', '.map',
+)
+
+
+def _looks_like_premature_read(error: Exception) -> bool:
+    msg = str(error)
+    return 'IncompleteRead' in msg or 'Response ended prematurely' in msg
+
+
+def _looks_like_ssl_eof(error: Exception) -> bool:
+    msg = str(error)
+    return 'SSLEOFError' in msg or 'UNEXPECTED_EOF_WHILE_READING' in msg
+
+
+def _is_writecfg(subpath: str) -> bool:
+    return subpath.lower().endswith('writecfg.cgi')
+
+
+def _writecfg_assumed_success(ip: str, port: int, subpath: str, reason: str):
+    logger.warning(
+        "[proxy] writecfg.cgi corto la respuesta; asumiendo aplicado %s:%s/%s: %s",
+        ip, port, subpath, reason,
+    )
+    return jsonify({
+        'success': True,
+        'status': 'ok',
+        'applied': True,
+        'proxy_warning': 'upstream_response_ended_prematurely_after_writecfg',
+    })
+
+
+def _apply_upstream_accept_headers(headers: dict, subpath: str) -> None:
+    path = subpath.lower()
+    headers.pop('Accept-Language', None)
+    if path.endswith('.cgi'):
+        headers['Accept'] = '*/*'
+        headers['Accept-Encoding'] = 'identity'
+        headers['Connection'] = 'close'
+    elif path.endswith(_PROXY_STATIC_EXTS):
+        headers['Accept'] = '*/*'
+        headers['Accept-Encoding'] = 'gzip, deflate, identity'
+    else:
+        headers['Accept-Encoding'] = 'gzip, deflate, identity'
+
+
+def _read_proxy_body(resp, ip, port, subpath, tolerate_empty=False):
+    chunks = []
+    if hasattr(resp.raw, 'enforce_content_length'):
+        resp.raw.enforce_content_length = False
+    try:
+        for chunk in resp.iter_content(chunk_size=65536):
+            if chunk:
+                chunks.append(chunk)
+        return b''.join(chunks)
+    except Exception as e:
+        raw = b''.join(chunks)
+        if raw or (tolerate_empty and _looks_like_premature_read(e)):
+            logger.warning(
+                "[proxy] Respuesta incompleta tolerada %s:%s/%s: %s",
+                ip, port, subpath, e,
+            )
+            return raw
+        raise
+
+
+def _proxy_request_with_retry(
+    ip, port, method, target_factory, headers, body, subpath,
+    reset_upstream=None,
+):
+    attempts = 2 if method in _PROXY_RETRY_METHODS else 1
+    last_error = None
+
+    for attempt in range(attempts):
+        req_headers = dict(headers)
+        if attempt > 0:
+            req_headers['Connection'] = 'close'
+
+        sess = _new_proxy_session(pool_maxsize=1)
+        try:
+            resp = sess.request(
+                method=method,
+                url=target_factory(),
+                headers=req_headers,
+                data=body,
+                allow_redirects=False,
+                stream=True,
+                timeout=(15, PROXY_UPSTREAM_TIMEOUT),
+            )
+            raw = _read_proxy_body(
+                resp, ip, port, subpath,
+                tolerate_empty=(
+                    method in _PROXY_RETRY_METHODS and attempt + 1 == attempts
+                ),
+            )
+            return resp, raw
+        except Exception as e:
+            last_error = e
+            if attempt + 1 < attempts:
+                if reset_upstream and _looks_like_ssl_eof(e):
+                    reset_upstream()
+                logger.warning(
+                    "[proxy] Reintentando %s:%s por conexion upstream rota: %s",
+                    ip, port, e,
+                )
+        finally:
+            try:
+                sess.close()
+            except Exception:
+                pass
+
+    raise last_error
+
+@app.route('/proxy/<ip>/<int:port>/', defaults={'subpath': ''}, methods=_PROXY_METHODS)
+@app.route('/proxy/<ip>/<int:port>/<path:subpath>', methods=_PROXY_METHODS)
+@login_required
+def device_proxy(ip, port, subpath):
+    # 1. Credenciales del hub desde la sesión (guardadas al hacer scan)
+    hub = _session_hub_creds()
+
+    # 2. Obtener (o crear) el túnel SSH → MikroTik hub → target
+    try:
+        local_port = tunnel_manager.get_local_port(
+            ip, port,
+            hub_host=hub['host'],
+            hub_port=hub['port'],
+            hub_user=hub['user'],
+            hub_pass=hub['pass'],
+        )
+    except Exception as e:
+        logger.error(f"[proxy] Tunel fallido {ip}:{port} via {hub['host']} — {e}")
+        return (
+            f'<pre style="font-family:monospace;padding:2rem">'
+            f'No se pudo crear el tunel hacia {ip}:{port}\n\n{e}</pre>',
+            502,
+        )
+
+    # 3. Construir URL destino (a través del túnel local)
+    scheme = 'https' if port in (443, 8443) else 'http'
+    query = request.query_string.decode('utf-8', errors='replace')
+
+    def target_url():
+        url = f'{scheme}://127.0.0.1:{local_port}/{subpath}'
+        if query:
+            url += '?' + query
+        return url
+
+    def reset_upstream():
+        nonlocal local_port
+        logger.warning(
+            "[proxy] Reiniciando tunel por EOF SSL %s:%s via %s",
+            ip, port, hub['host'],
+        )
+        tunnel_manager.close(ip, port, hub_host=hub['host'])
+        _drop_proxy_session(ip, port)
+        local_port = tunnel_manager.get_local_port(
+            ip, port,
+            hub_host=hub['host'],
+            hub_port=hub['port'],
+            hub_user=hub['user'],
+            hub_pass=hub['pass'],
+        )
+
+    # 3. Reenviar la petición
+    fwd_headers = {
+        k: v for k, v in request.headers
+        if k.lower() not in _HOP_BY_HOP
+        and k.lower() not in _STRIP_REQ
+        and k.lower() != 'host'
+    }
+    fwd_headers['Host'] = f'{ip}:{port}' if port not in (80, 443) else ip
+    _apply_upstream_accept_headers(fwd_headers, subpath)
+
+    # El browser es el dueño del jar de cookies; el Session solo gestiona
+    # la conexión TCP persistente.  Pasamos las cookies del browser como
+    # header crudo y limpiamos el jar interno para evitar conflictos.
+    browser_cookie = request.headers.get('Cookie', '')
+    if browser_cookie:
+        fwd_headers['Cookie'] = browser_cookie
+    else:
+        fwd_headers.pop('Cookie', None)
+
+    try:
+        resp, raw = _proxy_request_with_retry(
+            ip, port, request.method, target_url, fwd_headers,
+            request.get_data(), subpath, reset_upstream=reset_upstream,
+        )
+    except Exception as e:
+        if (
+            request.method == 'POST'
+            and _is_writecfg(subpath)
+            and _looks_like_premature_read(e)
+        ):
+            return _writecfg_assumed_success(ip, port, subpath, str(e))
+
+        logger.error(f"[proxy] Error de petición {ip}:{port}/{subpath} — {e}")
+        return (
+            f'<pre style="font-family:monospace;padding:2rem">'
+            f'Error al conectar con {ip}:{port}\n\n{e}</pre>',
+            502,
+        )
+
+    # 4. Extraer Set-Cookie del dispositivo (antes de leer el body)
+    raw_sc = (
+        resp.raw.headers.getlist('Set-Cookie')
+        if hasattr(resp.raw.headers, 'getlist')
+        else []
+    )
+    if not raw_sc and 'Set-Cookie' in resp.headers:
+        raw_sc = [resp.headers['Set-Cookie']]
+
+    # 5. Reescribir URLs en HTML / CSS. No tocar JS: los bundles minificados
+    # pueden contener "<head>" o URLs dentro de strings y romperse al editarlos.
+    content_type = resp.headers.get('Content-Type', '')
+    content_type_l = content_type.lower()
+    accept_l = request.headers.get('Accept', '').lower()
+    if (
+        not raw
+        and resp.status_code == 200
+        and ('json' in content_type_l or 'json' in accept_l)
+    ):
+        if request.method == 'POST' and _is_writecfg(subpath):
+            return _writecfg_assumed_success(ip, port, subpath, 'empty JSON response')
+
+        logger.error(
+            "[proxy] Respuesta JSON vacia de upstream %s:%s/%s",
+            ip, port, subpath,
+        )
+        return jsonify({
+            'error': 'empty_upstream_json_response',
+            'target': f'{ip}:{port}/{subpath}',
+        }), 502
+
+    if 'html' in content_type_l:
+        raw = _rewrite(raw.decode('utf-8', errors='replace'), ip, port, subpath).encode('utf-8')
+    elif 'css' in content_type_l:
+        raw = _rewrite_asset_urls(raw.decode('utf-8', errors='replace'), ip, port, subpath).encode('utf-8')
+
+    # 6. Manejar redirects del dispositivo
+    #    IMPORTANTE: incluir Set-Cookie incluso en redirects.
+    #    /cookiechecker devuelve 302 + Set-Cookie; si no se reenvía la cookie
+    #    el browser nunca la almacena y se queda en loop infinito.
+    if resp.status_code in (301, 302, 303, 307, 308):
+        location = _rewrite_location(resp.headers.get('Location', '/'), ip, port)
+        redir = redirect(location, code=resp.status_code)
+        for cookie in _rewrite_cookies(raw_sc):
+            redir.headers.add('Set-Cookie', cookie)
+        return redir
+
+    # 7. Construir respuesta para el browser
+    out_headers = {
+        k: v for k, v in resp.headers.items()
+        if k.lower() not in _HOP_BY_HOP
+    }
+    out_headers.pop('Set-Cookie', None)
+
+    flask_resp = Response(raw, status=resp.status_code,
+                          content_type=content_type)
+    for cookie in _rewrite_cookies(raw_sc):
+        flask_resp.headers.add('Set-Cookie', cookie)
+    for k, v in out_headers.items():
+        if k.lower() != 'set-cookie':
+            flask_resp.headers[k] = v
+
+    return flask_resp
+
+
+@app.route('/api/proxy/list')
+@login_required
+def api_proxy_list():
+    return jsonify(tunnel_manager.list_active())
+
+
+@app.route('/api/proxy/tunnel', methods=['POST'])
+@login_required
+def api_proxy_tunnel():
+    """Crea (o reutiliza) un túnel TCP puro y devuelve el puerto local.
+    Uso: WinBox, SSH, Telnet, etc. — cualquier protocolo no-HTTP.
+    Parámetros JSON:
+      ip      — IP del dispositivo destino (requerido)
+      port    — Puerto destino (default 8291 WinBox)
+      hub_ip  — IP del hub MikroTik que tiene acceso LAN al destino (default M1_HOST)
+    """
+    data = request.get_json(silent=True) or {}
+    ip   = data.get('ip', '').strip()
+    port = int(data.get('port', 8291))
+    if not ip:
+        return jsonify({'error': 'ip requerido'}), 400
+
+    hub = _session_hub_creds()
+    try:
+        tunnel = tunnel_manager.get_local_port_info(
+            ip, port,
+            hub_host=hub['host'],
+            hub_port=hub['port'],
+            hub_user=hub['user'],
+            hub_pass=hub['pass'],
+        )
+        local_port = tunnel['local_port']
+        return jsonify({
+            'local_port': local_port,
+            'connect_to': f'localhost:{local_port}',
+            'reused': tunnel['reused'],
+        })
+    except Exception as e:
+        logger.error(f"[tunnel] Error creando tunel {ip}:{port} via {hub['host']} — {e}")
+        return jsonify({'error': str(e)}), 502
+
+
+@app.route('/api/proxy/close', methods=['POST'])
+@login_required
+def api_proxy_close():
+    data = request.get_json(silent=True) or {}
+    ip   = data.get('ip', '')
+    port = int(data.get('port', 0))
+    hub = _session_hub_creds()
+    tunnel_manager.close(ip, port, hub_host=hub['host'])
+    with _proxy_sessions_lock:
+        _proxy_sessions.pop((ip, port), None)
+    return jsonify({'ok': True})
 
 
 if __name__ == "__main__":

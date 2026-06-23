@@ -142,6 +142,72 @@
 
 </div>
 
+<!-- Acceso manual por IP ──────────────────────────────────────────── -->
+<div class="container-fluid mt-3 mb-4">
+  <div class="card border-secondary">
+    <div class="card-header py-2 bg-secondary text-white">
+      <small class="fw-semibold">Acceso manual por IP</small>
+    </div>
+    <div class="card-body py-2">
+      <div class="row g-2 align-items-center">
+        <div class="col-auto">
+          <input id="manual-ip" type="text" class="form-control form-control-sm font-monospace"
+                 placeholder="192.168.x.x" style="width:160px"
+                 onkeydown="if(event.key==='Enter') manualPing()">
+        </div>
+        <div class="col-auto">
+          <select id="manual-port" class="form-select form-select-sm" style="width:100px">
+            <option value="80">Web (80)</option>
+            <option value="443">HTTPS (443)</option>
+            <option value="8080">HTTP (8080)</option>
+            <option value="8443">HTTPS (8443)</option>
+          </select>
+        </div>
+        <div class="col-auto">
+          <button class="btn btn-outline-info btn-sm" onclick="manualPing()">Ping</button>
+          <button class="btn btn-outline-secondary btn-sm ms-1" onclick="manualProxy()">Web</button>
+          <button class="btn btn-outline-warning btn-sm ms-1" onclick="manualWinbox()">WinBox</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal WinBox ──────────────────────────────────────────────────── -->
+<div class="modal fade" id="winboxModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header py-2">
+        <h6 class="modal-title">
+          WinBox &rarr; <span id="wb-target-ip" class="text-primary"></span>
+        </h6>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div id="wb-loading" class="d-flex align-items-center gap-2 text-secondary">
+          <div class="spinner-border spinner-border-sm"></div>
+          <span>Creando túnel...</span>
+        </div>
+        <div id="wb-result" style="display:none">
+          <p class="mb-2 small text-muted">Copia esta dirección en WinBox &rarr; Connect To:</p>
+          <div class="input-group">
+            <input id="wb-addr" type="text" class="form-control form-control-sm font-monospace"
+                   readonly onclick="this.select()">
+            <button class="btn btn-outline-primary btn-sm" onclick="copyWinbox()" title="Copiar">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" fill="currentColor" viewBox="0 0 16 16">
+                <path d="M4 1.5H3a2 2 0 0 0-2 2V14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V3.5a2 2 0 0 0-2-2h-1v1h1a1 1 0 0 1 1 1V14a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V3.5a1 1 0 0 1 1-1h1z"/>
+                <path d="M9.5 1a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-3a.5.5 0 0 1-.5-.5v-1a.5.5 0 0 1 .5-.5zm-3-1A1.5 1.5 0 0 0 5 1.5v1A1.5 1.5 0 0 0 6.5 4h3A1.5 1.5 0 0 0 11 2.5v-1A1.5 1.5 0 0 0 9.5 0z"/>
+              </svg>
+            </button>
+          </div>
+          <div id="wb-copied" class="text-success small mt-1" style="display:none">¡Copiado!</div>
+        </div>
+        <div id="wb-error" class="alert alert-danger small py-2" style="display:none"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Modal ping ────────────────────────────────────────────────────── -->
 <div class="modal fade" id="pingModal" tabindex="-1">
   <div class="modal-dialog modal-lg">
@@ -263,9 +329,17 @@ function renderResults(data) {
     const mac  = d.mac || d['mac-address'] || '—';
     const name = d.name || d.identity || d.hostname || '—';
     const pingBtn = ip
-      ? `<button class="btn btn-outline-info btn-ping" onclick="openPing('${ip}')">
-           Ping
-         </button>`
+      ? `<button class="btn btn-outline-info btn-ping" onclick="openPing('${ip}')">Ping</button>`
+      : '';
+    const isMkt = d.device_type === 'mikrotik';
+    const proxyBtn = ip
+      ? isMkt
+        ? `<button class="btn btn-outline-warning btn-ping ms-1"
+                  onclick="openWinbox('${ip}')">WinBox</button>
+           <button class="btn btn-outline-secondary btn-ping ms-1"
+                  onclick="openProxy('${ip}', 80)">Web</button>`
+        : `<button class="btn btn-outline-secondary btn-ping ms-1"
+                  onclick="openProxy('${ip}')">Abrir</button>`
       : '';
     return `<tr>
       <td>${badge(d.device_type)}</td>
@@ -275,7 +349,7 @@ function renderResults(data) {
       <td><small>${d.platform || d.board || '—'}</small></td>
       <td><small>${d.version || d.firmware || '—'}</small></td>
       <td><small>${d.iface || d.interface || '—'}</small></td>
-      <td>${pingBtn}</td>
+      <td class="text-nowrap">${pingBtn}${proxyBtn}</td>
     </tr>`;
   }).join('');
 }
@@ -303,6 +377,93 @@ function openPing(ip) {
 function retryPing() {
   if (!lastPingIp) return;
   openPing(lastPingIp);
+}
+
+// ── Acceso manual por IP ─────────────────────────────────────────────────
+function manualPing() {
+  const ip = document.getElementById('manual-ip').value.trim();
+  if (!ip) return;
+  openPing(ip);
+}
+function manualProxy() {
+  const ip   = document.getElementById('manual-ip').value.trim();
+  const port = document.getElementById('manual-port').value;
+  if (!ip) return;
+  openProxy(ip, parseInt(port));
+}
+function manualWinbox() {
+  const ip = document.getElementById('manual-ip').value.trim();
+  if (!ip) return;
+  openWinbox(ip);
+}
+
+// ── Web por túnel TCP directo (tipo PuTTY local forward) ─────────────────
+function openProxy(ip, port) {
+  port = port || 443;
+  const tab = window.open('about:blank', '_blank');
+  const hubIp = (activeCreds && activeCreds.host) ? activeCreds.host : '';
+
+  fetch('/api/proxy/tunnel', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ip, port, hub_ip: hubIp }),
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (data.error) throw new Error(data.error);
+    const scheme = port === 80 ? 'http' : 'https';
+    const local = data.local_port ? `127.0.0.1:${data.local_port}` : data.connect_to;
+    tab.location = `${scheme}://${local}/`;
+  })
+  .catch(err => {
+    if (tab) tab.close();
+    alert(`No se pudo abrir el túnel web: ${err.message || err}`);
+  });
+}
+
+// ── WinBox (MikroTik) ────────────────────────────────────────────────────
+const winboxModal = new bootstrap.Modal(document.getElementById('winboxModal'));
+
+function openWinbox(ip) {
+  document.getElementById('wb-target-ip').textContent = ip;
+  document.getElementById('wb-loading').style.display = 'flex';
+  document.getElementById('wb-result').style.display  = 'none';
+  document.getElementById('wb-error').style.display   = 'none';
+  document.getElementById('wb-copied').style.display  = 'none';
+  winboxModal.show();
+
+  const hubIp = (activeCreds && activeCreds.host) ? activeCreds.host : '';
+  fetch('/api/proxy/tunnel', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ip, port: 8291, hub_ip: hubIp }),
+  })
+  .then(r => r.json())
+  .then(data => {
+    document.getElementById('wb-loading').style.display = 'none';
+    if (data.error) {
+      document.getElementById('wb-error').textContent = data.error;
+      document.getElementById('wb-error').style.display = '';
+      return;
+    }
+    document.getElementById('wb-addr').value = data.connect_to;
+    document.getElementById('wb-result').style.display = '';
+  })
+  .catch(err => {
+    document.getElementById('wb-loading').style.display = 'none';
+    document.getElementById('wb-error').textContent = `Error: ${err}`;
+    document.getElementById('wb-error').style.display = '';
+  });
+}
+
+function copyWinbox() {
+  const input = document.getElementById('wb-addr');
+  input.select();
+  navigator.clipboard.writeText(input.value).then(() => {
+    const el = document.getElementById('wb-copied');
+    el.style.display = '';
+    setTimeout(() => { el.style.display = 'none'; }, 2000);
+  });
 }
 
 function doPing(ip) {
