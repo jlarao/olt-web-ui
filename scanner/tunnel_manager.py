@@ -33,6 +33,14 @@ _M1_PASS = os.getenv('M1_PASS', '')
 TIMEOUT_MIN = int(os.getenv('TUNNEL_IDLE_TIMEOUT_MIN', '30'))  # minutos de inactividad antes de cerrar el túnel
 SSH_CONNECT_TIMEOUT = float(os.getenv('TUNNEL_SSH_CONNECT_TIMEOUT', '20'))
 OPEN_CHANNEL_TIMEOUT = float(os.getenv('TUNNEL_OPEN_CHANNEL_TIMEOUT', '60'))
+TUNNEL_BIND_HOST = os.getenv('TUNNEL_BIND_HOST', '127.0.0.1')
+TUNNEL_PUBLIC_HOST = os.getenv('TUNNEL_PUBLIC_HOST', '127.0.0.1')
+_DEFAULT_ALLOWED_PORTS = '43117,47291,50983,53821,56439,59207,61381,62743,64109,65327'
+TUNNEL_ALLOWED_PORTS = [
+    int(p.strip())
+    for p in os.getenv('TUNNEL_ALLOWED_PORTS', _DEFAULT_ALLOWED_PORTS).split(',')
+    if p.strip()
+]
 
 
 # ── Clase de túnel individual ─────────────────────────────────────────────
@@ -43,7 +51,7 @@ class _SSHTunnel:
     SSH directo al hub MikroTik; el hub forwardea a remote_host:remote_port en su LAN.
     """
 
-    def __init__(self, transport, remote_host, remote_port):
+    def __init__(self, transport, remote_host, remote_port, bind_host, local_port):
         self.remote_host = remote_host
         self.remote_port = remote_port
         self.is_active   = False
@@ -53,7 +61,7 @@ class _SSHTunnel:
 
         self._srv_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self._srv_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._srv_sock.bind(('127.0.0.1', 0))
+        self._srv_sock.bind((bind_host, local_port))
         self._srv_sock.listen(10)
         self.local_port = self._srv_sock.getsockname()[1]
         self.is_active  = True
@@ -181,6 +189,9 @@ class TunnelManager:
                 )
                 return {
                     'local_port': entry['tunnel'].local_port,
+                    'public_host': TUNNEL_PUBLIC_HOST,
+                    'public_url': self._public_url(entry['tunnel'].local_port, target_port),
+                    'expires_in_sec': TIMEOUT_MIN * 60,
                     'reused': True,
                 }
             if entry:
@@ -189,6 +200,9 @@ class TunnelManager:
                                       target_ip, target_port)
             return {
                 'local_port': local_port,
+                'public_host': TUNNEL_PUBLIC_HOST,
+                'public_url': self._public_url(local_port, target_port),
+                'expires_in_sec': TIMEOUT_MIN * 60,
                 'reused': False,
             }
 
@@ -205,6 +219,8 @@ class TunnelManager:
                     'port':       k[1],
                     'hub':        k[2],
                     'local_port': v['tunnel'].local_port,
+                    'public_host': TUNNEL_PUBLIC_HOST,
+                    'public_url': self._public_url(v['tunnel'].local_port, k[1]),
                     'idle_sec':   int(time.time() - v['last_used']),
                     'active':     self._is_alive(v['tunnel']),
                 }
@@ -217,7 +233,24 @@ class TunnelManager:
         transport = self._get_hub_transport(
             hub_key, ssh_host, ssh_port, ssh_user, ssh_pass
         )
-        tunnel = _SSHTunnel(transport, target_ip, target_port)
+        last_error = None
+        tunnel = None
+        for local_port in self._available_ports():
+            try:
+                tunnel = _SSHTunnel(
+                    transport, target_ip, target_port, TUNNEL_BIND_HOST, local_port
+                )
+                break
+            except OSError as e:
+                last_error = e
+                logger.warning(
+                    f"[tunnel] puerto local ocupado/no disponible {TUNNEL_BIND_HOST}:{local_port} — {e}"
+                )
+        if tunnel is None:
+            raise RuntimeError(
+                f'No hay puertos disponibles en TUNNEL_ALLOWED_PORTS: {last_error}'
+            )
+
         self._pool[key] = {
             'tunnel': tunnel,
             'last_used': time.time(),
@@ -228,6 +261,21 @@ class TunnelManager:
             f" -> localhost:{tunnel.local_port}"
         )
         return tunnel.local_port
+
+    def _available_ports(self) -> list[int]:
+        if not TUNNEL_ALLOWED_PORTS:
+            raise RuntimeError('TUNNEL_ALLOWED_PORTS no tiene puertos configurados')
+
+        used = {
+            entry['tunnel'].local_port
+            for entry in self._pool.values()
+            if self._is_alive(entry['tunnel'])
+        }
+        return [port for port in TUNNEL_ALLOWED_PORTS if port not in used]
+
+    def _public_url(self, local_port: int, target_port: int) -> str:
+        scheme = 'http' if int(target_port) == 80 else 'https'
+        return f'{scheme}://{TUNNEL_PUBLIC_HOST}:{local_port}/'
 
     def _is_alive(self, tunnel) -> bool:
         if not tunnel or not tunnel.is_active:

@@ -413,7 +413,7 @@ function openProxy(ip, port) {
     if (data.error) throw new Error(data.error);
     const scheme = port === 80 ? 'http' : 'https';
     const local = data.local_port ? `127.0.0.1:${data.local_port}` : data.connect_to;
-    tab.location = `${scheme}://${local}/`;
+    tab.location = data.public_url || `${scheme}://${local}/`;
   })
   .catch(err => {
     if (tab) tab.close();
