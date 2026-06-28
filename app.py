@@ -1,6 +1,6 @@
 from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify, Response
 from flask_login import LoginManager, login_user, login_required, logout_user, UserMixin
-from werkzeug.security import check_password_hash
+from werkzeug.security import check_password_hash, generate_password_hash
 import sqlite3,time
 import os
 import sys
@@ -9,8 +9,10 @@ import subprocess
 import atexit
 from logging.handlers import RotatingFileHandler
 import json
+import uuid
+from functools import wraps
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, timedelta
 import re
 import ssl as _ssl
 import unicodedata
@@ -253,36 +255,123 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
 
+from flask_cors import CORS
+CORS(app, supports_credentials=True)
+
 # Configurar login
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = "login"
 
 DATABASE = "users.db"
-# conn = conectar()
+
+
+def _init_db():
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL,
+            full_name TEXT NOT NULL DEFAULT '',
+            role TEXT NOT NULL DEFAULT 'user'
+        )
+    """)
+    for col, definition in [('full_name', "TEXT NOT NULL DEFAULT ''"), ('role', "TEXT NOT NULL DEFAULT 'user'")]:
+        try:
+            c.execute(f"ALTER TABLE users ADD COLUMN {col} {definition}")
+        except Exception:
+            pass
+    # El primer usuario registrado es admin
+    c.execute("UPDATE users SET role='admin' WHERE id=1 AND role='user'")
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS api_tokens (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    INTEGER NOT NULL,
+            token      TEXT NOT NULL UNIQUE,
+            name       TEXT NOT NULL DEFAULT 'Mobile',
+            created_at TEXT NOT NULL,
+            last_used  TEXT,
+            expires_at TEXT,
+            revoked    INTEGER NOT NULL DEFAULT 0,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    """)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_api_tokens_token ON api_tokens(token)")
+    conn.commit()
+    conn.close()
+
+
+_init_db()
+
+
+# ── Autenticación con token Bearer ───────────────────────────────────────────
+
+def _get_valid_token(token_val: str):
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("SELECT id, user_id, expires_at FROM api_tokens WHERE token=? AND revoked=0", (token_val,))
+    row = c.fetchone()
+    conn.close()
+    if not row:
+        return None
+    if row['expires_at'] and datetime.fromisoformat(row['expires_at']) < datetime.utcnow():
+        return None
+    return dict(row)
+
+
+def _touch_token(token_id: int):
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute("UPDATE api_tokens SET last_used=? WHERE id=?", (datetime.utcnow().isoformat(), token_id))
+    conn.commit()
+    conn.close()
+
+
+def api_required(f):
+    """Decorator que acepta sesión web (cookie) O Bearer token para la app mobile."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        from flask_login import current_user
+        if current_user.is_authenticated:
+            return f(*args, **kwargs)
+        auth = request.headers.get('Authorization', '')
+        if auth.startswith('Bearer '):
+            row = _get_valid_token(auth[7:].strip())
+            if row:
+                _touch_token(row['id'])
+                return f(*args, **kwargs)
+        return jsonify({'error': 'No autorizado'}), 401
+    return decorated
+
 
 class User(UserMixin):
-    def __init__(self, id_, username, password_hash):
+    def __init__(self, id_, username, password_hash, full_name='', role='user'):
         self.id = id_
         self.username = username
         self.password_hash = password_hash
+        self.full_name = full_name
+        self.role = role
 
     @staticmethod
     def get(username):
         conn = sqlite3.connect(DATABASE)
         cursor = conn.cursor()
-        cursor.execute("SELECT id, username, password FROM users WHERE username = ?", (username,))
+        cursor.execute("SELECT id, username, password, full_name, role FROM users WHERE username = ?", (username,))
         row = cursor.fetchone()
         conn.close()
         if row:
             return User(*row)
         return None
 
+
 @login_manager.user_loader
 def load_user(user_id):
     conn = sqlite3.connect(DATABASE)
     cursor = conn.cursor()
-    cursor.execute("SELECT id, username, password FROM users WHERE id = ?", (user_id,))
+    cursor.execute("SELECT id, username, password, full_name, role FROM users WHERE id = ?", (user_id,))
     row = cursor.fetchone()
     conn.close()
     if row:
@@ -1950,6 +2039,170 @@ def api_proxy_close():
     with _proxy_sessions_lock:
         _proxy_sessions.pop((ip, port), None)
     return jsonify({'ok': True})
+
+
+# ── Gestión de usuarios ───────────────────────────────────────────────────────
+
+@app.route('/usuarios')
+@login_required
+def usuarios():
+    from flask_login import current_user
+    if current_user.role != 'admin':
+        flash('Acceso solo para administradores')
+        return redirect('/dashboard')
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("SELECT id, username, full_name, role FROM users ORDER BY id")
+    users_list = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return render_template('usuarios.html', users=users_list)
+
+
+@app.route('/usuarios/crear', methods=['POST'])
+@login_required
+def usuarios_crear():
+    from flask_login import current_user
+    if current_user.role != 'admin':
+        flash('Acceso solo para administradores')
+        return redirect('/dashboard')
+    username  = request.form.get('username', '').strip()
+    password  = request.form.get('password', '').strip()
+    full_name = request.form.get('full_name', '').strip()
+    role      = request.form.get('role', 'user').strip()
+    if not username or not password:
+        flash('Usuario y contraseña son requeridos')
+        return redirect('/usuarios')
+    if role not in ('admin', 'user'):
+        role = 'user'
+    try:
+        conn = sqlite3.connect(DATABASE)
+        c = conn.cursor()
+        c.execute(
+            "INSERT INTO users (username, password, full_name, role) VALUES (?,?,?,?)",
+            (username, generate_password_hash(password), full_name, role),
+        )
+        conn.commit()
+        conn.close()
+        flash(f'Usuario "{username}" creado correctamente')
+    except sqlite3.IntegrityError:
+        flash(f'El usuario "{username}" ya existe')
+    return redirect('/usuarios')
+
+
+@app.route('/usuarios/eliminar/<int:user_id>', methods=['POST'])
+@login_required
+def usuarios_eliminar(user_id):
+    from flask_login import current_user
+    if current_user.role != 'admin':
+        flash('Acceso solo para administradores')
+        return redirect('/dashboard')
+    if user_id == current_user.id:
+        flash('No puedes eliminar tu propia cuenta')
+        return redirect('/usuarios')
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute("DELETE FROM users WHERE id=?", (user_id,))
+    conn.commit()
+    conn.close()
+    flash('Usuario eliminado')
+    return redirect('/usuarios')
+
+
+# ── Auth para app mobile (token Bearer 24 h) ──────────────────────────────────
+
+@app.route('/api/auth/login', methods=['POST'])
+def api_auth_login():
+    data     = request.get_json(silent=True) or {}
+    username = data.get('username', '').strip()
+    password = data.get('password', '')
+    if not username or not password:
+        return jsonify({'error': 'usuario y contraseña requeridos'}), 400
+    user = User.get(username)
+    if not user or not check_password_hash(user.password_hash, password):
+        return jsonify({'error': 'Credenciales incorrectas'}), 401
+    token_val  = uuid.uuid4().hex + uuid.uuid4().hex   # 64 chars aleatorios
+    now        = datetime.utcnow()
+    expires_at = (now + timedelta(hours=24)).isoformat()
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO api_tokens (user_id, token, name, created_at, expires_at) VALUES (?,?,?,?,?)",
+        (user.id, token_val, 'Mobile login', now.isoformat(), expires_at),
+    )
+    conn.commit()
+    conn.close()
+    logger.info(f"[api_auth] Token creado para usuario {username}")
+    return jsonify({
+        'token':      token_val,
+        'expires_at': expires_at,
+        'user': {
+            'id':        user.id,
+            'username':  user.username,
+            'full_name': user.full_name,
+            'role':      user.role,
+        },
+    })
+
+
+@app.route('/api/auth/logout', methods=['POST'])
+def api_auth_logout():
+    auth = request.headers.get('Authorization', '')
+    if auth.startswith('Bearer '):
+        token_val = auth[7:].strip()
+        conn = sqlite3.connect(DATABASE)
+        c = conn.cursor()
+        c.execute("UPDATE api_tokens SET revoked=1 WHERE token=?", (token_val,))
+        conn.commit()
+        conn.close()
+        logger.info("[api_auth] Token revocado via logout")
+    return jsonify({'ok': True})
+
+
+@app.route('/api/auth/me')
+def api_auth_me():
+    auth = request.headers.get('Authorization', '')
+    if not auth.startswith('Bearer '):
+        return jsonify({'error': 'No autorizado'}), 401
+    row = _get_valid_token(auth[7:].strip())
+    if not row:
+        return jsonify({'error': 'Token inválido o expirado'}), 401
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("SELECT id, username, full_name, role FROM users WHERE id=?", (row['user_id'],))
+    user = dict(c.fetchone() or {})
+    conn.close()
+    return jsonify(user)
+
+
+_BACKBONE_HOST = os.getenv('BACKBONE_HOST', '')
+
+
+@app.route('/api/health')
+def api_health():
+    """Endpoint público — usado por la app mobile para verificar conectividad."""
+    return jsonify({'status': 'ok'})
+
+
+@app.route('/api/health/backbone')
+@login_required
+def api_backbone_health():
+    host = _BACKBONE_HOST
+    if not host:
+        return jsonify({'status': 'unknown', 'error': 'BACKBONE_HOST no configurado'}), 503
+    import platform
+    is_windows = platform.system().lower() == 'windows'
+    if is_windows:
+        cmd = ['ping', '-n', '5', '-w', '2000', host]
+    else:
+        cmd = ['ping', '-c', '5', '-W', '2', host]
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=20)
+        status = 'online' if result.returncode == 0 else 'offline'
+    except Exception:
+        status = 'offline'
+    return jsonify({'status': status, 'host': host})
 
 
 if __name__ == "__main__":
