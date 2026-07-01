@@ -1212,12 +1212,14 @@ def api_info_sn(sn):
             records = spreadsheet.worksheet(ws_name).get_all_records()
             for record in records:
                 if str(record.get("sn", "")).strip().upper() == sn_upper:
+                    sheet_key = "fibra_ma" if ws_name == "cuentas fibra ma" else "fibra"
                     result = {
-                        "name": record.get("name", ""),
-                        "sn":   record.get("sn", ""),
-                        "user": record.get("user", ""),
-                        "port": record.get("port", ""),
-                        "ont":  record.get("ont", ""),
+                        "name":  record.get("name", ""),
+                        "sn":    record.get("sn", ""),
+                        "user":  record.get("user", ""),
+                        "port":  record.get("port", ""),
+                        "ont":   record.get("ont", ""),
+                        "sheet": sheet_key,
                     }
                     logger.info(
                         f"[api-info-sn] Encontrado en '{ws_name}' | SN: {result['sn']} "
@@ -2376,10 +2378,6 @@ def api_alta_ont():
     """Registra una ONU en el OLT vía Telnet y crea el PPPoE en MikroTik. Requiere Bearer token."""
     data = request.get_json(silent=True) or {}
 
-    pwd = str(data.get('pwd', ''))
-    if not PWD_INSERT_OLT or pwd != PWD_INSERT_OLT:
-        return jsonify({'success': False, 'error': 'Password de autorización incorrecto'}), 403
-
     frame = 0
     slot  = 1
     port   = str(data.get('port', '')).strip()
@@ -2393,7 +2391,14 @@ def api_alta_ont():
     if not all([port, ontid, sn, desc, sp, pppoe]):
         return jsonify({'success': False, 'error': 'Faltan campos requeridos'}), 400
 
-    tn, resultado = alta_ont_version_three(frame, slot, port, ontid, sn, desc, sp)
+    olt = str(data.get('olt', 'EA')).strip().upper()
+    if olt not in ('EA', 'MA'):
+        olt = 'EA'
+
+    if olt == 'MA':
+        tn, resultado = alta_ont_version_three_ma(frame, slot, port, ontid, sn, desc, sp)
+    else:
+        tn, resultado = alta_ont_version_three(frame, slot, port, ontid, sn, desc, sp)
 
     if tn is None or any(x in str(resultado) for x in ('Error', 'Failure', 'failure')):
         if tn is not None:
