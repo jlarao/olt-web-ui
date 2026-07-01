@@ -2389,11 +2389,18 @@ def api_alta_ont():
     profile = str(data.get('profile', '25M')).strip()
 
     if not all([port, ontid, sn, desc, sp, pppoe]):
+        logger.warning("api_alta_ont: faltan campos requeridos | data=%s", data)
         return jsonify({'success': False, 'error': 'Faltan campos requeridos'}), 400
 
     olt = str(data.get('olt', 'EA')).strip().upper()
     if olt not in ('EA', 'MA'):
         olt = 'EA'
+
+    olt_host = os.getenv("OLT_IP_MA") if olt == 'MA' else os.getenv("OLT_HOST", "OLT_EA")
+    logger.info(
+        "api_alta_ont: INICIO | olt=%s host=%s frame=%s slot=%s port=%s ontid=%s sn=%s desc=%s sp=%s pppoe=%s profile=%s",
+        olt, olt_host, frame, slot, port, ontid, sn, desc, sp, pppoe, profile
+    )
 
     if olt == 'MA':
         tn, resultado = alta_ont_version_three_ma(frame, slot, port, ontid, sn, desc, sp)
@@ -2406,6 +2413,10 @@ def api_alta_ont():
                 tn.close()
             except Exception:
                 pass
+        logger.error(
+            "api_alta_ont: FALLO | olt=%s host=%s sn=%s resultado=%s",
+            olt, olt_host, sn, resultado
+        )
         return jsonify({'success': False, 'resultado': str(resultado)})
 
     time.sleep(10)
@@ -2413,6 +2424,10 @@ def api_alta_ont():
     time.sleep(0.3)
     tn.close()
     call_mkt(pppoe, profile, desc)
+    logger.info(
+        "api_alta_ont: EXITO | olt=%s host=%s sn=%s ontid=%s sp=%s pppoe=%s",
+        olt, olt_host, sn, ontid, sp, pppoe
+    )
     return jsonify({'success': True, 'resultado': str(resultado)})
 
 
