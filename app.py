@@ -1173,6 +1173,65 @@ def buscar_sn(sn):
     logger.warning(f"[buscar-sn] No encontrado | SN: {sn_upper}")
     return jsonify({"error": "ONT no encontrada"}), 404
 
+
+@app.route("/api/info-sn/<sn>", methods=["GET"])
+@api_required
+def api_info_sn(sn):
+    """Busca un SN en el sheet y devuelve name, sn, user, port, ont. Requiere Bearer token."""
+    import gspread
+    from oauth2client.service_account import ServiceAccountCredentials
+
+    sn_upper = sn.strip().upper()
+    logger.info(f"[api-info-sn] Petición recibida | SN: {sn_upper} | IP: {request.remote_addr}")
+
+    if not sn_upper:
+        logger.warning("[api-info-sn] SN vacío en la petición")
+        return jsonify({"error": "El SN no puede estar vacío"}), 400
+
+    try:
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds = ServiceAccountCredentials.from_json_keyfile_name(
+            'react-elearning-e12a6-c869ba1c268d.json', scope
+        )
+        client = gspread.authorize(creds)
+    except FileNotFoundError:
+        logger.error("[api-info-sn] Archivo de credenciales de Google no encontrado")
+        return jsonify({"error": "Credenciales de Google no configuradas"}), 503
+    except Exception as e:
+        logger.error(f"[api-info-sn] Error al autenticar con Google: {e}")
+        return jsonify({"error": "Error al conectar con Google Sheets"}), 503
+
+    try:
+        spreadsheet = client.open("Ingreso2024")
+    except Exception as e:
+        logger.error(f"[api-info-sn] No se pudo abrir el spreadsheet: {e}")
+        return jsonify({"error": "No se pudo abrir el spreadsheet"}), 503
+
+    try:
+        for ws_name in ["cuentas fibra", "cuentas fibra ma"]:
+            records = spreadsheet.worksheet(ws_name).get_all_records()
+            for record in records:
+                if str(record.get("sn", "")).strip().upper() == sn_upper:
+                    result = {
+                        "name": record.get("name", ""),
+                        "sn":   record.get("sn", ""),
+                        "user": record.get("user", ""),
+                        "port": record.get("port", ""),
+                        "ont":  record.get("ont", ""),
+                    }
+                    logger.info(
+                        f"[api-info-sn] Encontrado en '{ws_name}' | SN: {result['sn']} "
+                        f"| user: {result['user']} | port: {result['port']} | ont: {result['ont']}"
+                    )
+                    return jsonify(result), 200
+    except Exception as e:
+        logger.error(f"[api-info-sn] Error al leer el sheet: {e}")
+        return jsonify({"error": "Error al leer los datos del sheet"}), 500
+
+    logger.warning(f"[api-info-sn] No encontrado | SN: {sn_upper}")
+    return jsonify({"error": "ONT no encontrada"}), 404
+
+
 @app.route("/alta-ont-gs", methods=["POST"])
 # @login_required
 def alta_ont_web_gs():
@@ -2289,6 +2348,67 @@ def api_agregar_fibra():
     except Exception as e:
         logger.error(f"[api-agregar-fibra] Error: {e}")
         return jsonify({'error': f'Error al agregar registro: {str(e)}'}), 500
+
+
+@app.route('/api/sugerencias-ont/<port>')
+@api_required
+def api_sugerencias_ont(port):
+    """Devuelve el próximo ONT ID disponible para el puerto y el siguiente service port global."""
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute("SELECT ont_id FROM onus WHERE port_id = ? AND deleted = 0 ORDER BY ont_id ASC", (port,))
+    ont_ids = [row[0] for row in c.fetchall()]
+    next_ontid = len(ont_ids)
+    for i, oid in enumerate(ont_ids):
+        if oid != i:
+            next_ontid = i
+            break
+    c.execute("SELECT sp FROM onus WHERE deleted = 0 ORDER BY sp DESC LIMIT 1")
+    row = c.fetchone()
+    next_sp = (row[0] + 1) if row else 1
+    conn.close()
+    return jsonify({'ontid': next_ontid, 'sp': next_sp})
+
+
+@app.route('/api/alta-ont', methods=['POST'])
+@api_required
+def api_alta_ont():
+    """Registra una ONU en el OLT vía Telnet y crea el PPPoE en MikroTik. Requiere Bearer token."""
+    data = request.get_json(silent=True) or {}
+
+    pwd = str(data.get('pwd', ''))
+    if not PWD_INSERT_OLT or pwd != PWD_INSERT_OLT:
+        return jsonify({'success': False, 'error': 'Password de autorización incorrecto'}), 403
+
+    frame = 0
+    slot  = 1
+    port   = str(data.get('port', '')).strip()
+    ontid  = str(data.get('ontid', '')).strip()
+    sn     = str(data.get('sn', '')).strip()
+    desc   = str(data.get('desc', '')).strip()
+    sp     = str(data.get('sp', '')).strip()
+    pppoe  = str(data.get('pppoe', '')).strip()
+    profile = str(data.get('profile', '25M')).strip()
+
+    if not all([port, ontid, sn, desc, sp, pppoe]):
+        return jsonify({'success': False, 'error': 'Faltan campos requeridos'}), 400
+
+    tn, resultado = alta_ont_version_three(frame, slot, port, ontid, sn, desc, sp)
+
+    if tn is None or any(x in str(resultado) for x in ('Error', 'Failure', 'failure')):
+        if tn is not None:
+            try:
+                tn.close()
+            except Exception:
+                pass
+        return jsonify({'success': False, 'resultado': str(resultado)})
+
+    time.sleep(10)
+    _, out = send_cmd_telnet_add_onu_two(tn, "save\r\n")
+    time.sleep(0.3)
+    tn.close()
+    call_mkt(pppoe, profile, desc)
+    return jsonify({'success': True, 'resultado': str(resultado)})
 
 
 if __name__ == "__main__":
