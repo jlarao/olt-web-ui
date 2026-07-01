@@ -1253,6 +1253,7 @@ def delete_ont_sn(sn):
         card_id, slot_id, port_id, ont_id = row
         result, texto = delete_ont_cont(card_id, slot_id, port_id, ont_id)
         return result, texto
+    return False, f"ONT con SN {sn} no encontrada en la base de datos (EA)"
 
 def delete_sp_ma(sp):
     tn, estado, resultado = conectar_ma()
@@ -1332,6 +1333,7 @@ def delete_ont_sn_ma(sn):
         card_id, slot_id, port_id, ont_id = row
         result, texto = delete_ont_cont_ma(card_id, slot_id, port_id, ont_id)
         return result, texto
+    return False, f"ONT con SN {sn} no encontrada en la base de datos (MA)"
 
 def send_cmd_telnet_add_onu(tn,cmd):
     tn.write(cmd.encode("ascii") + b"\r\n")

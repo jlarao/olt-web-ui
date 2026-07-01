@@ -2433,6 +2433,36 @@ def api_alta_ont():
     return jsonify({'success': True, 'resultado': str(resultado)})
 
 
+@app.route('/api/eliminar-onu', methods=['POST'])
+@api_required
+def api_eliminar_onu():
+    """Elimina una ONU del OLT vía Telnet. Requiere Bearer token."""
+    data = request.get_json(silent=True) or {}
+    sn  = str(data.get('sn', '')).strip().upper()
+    olt = str(data.get('olt', 'EA')).strip().upper()
+    if olt not in ('EA', 'MA'):
+        olt = 'EA'
+    if not sn:
+        return jsonify({'success': False, 'error': 'El SN es requerido'}), 400
+
+    logger.info(f"[api-eliminar-onu] SN: {sn} | OLT: {olt} | IP: {request.remote_addr}")
+    try:
+        if olt == 'MA':
+            result, texto = delete_ont_sn_ma(sn)
+        else:
+            result, texto = delete_ont_sn(sn)
+
+        if result:
+            logger.info(f"[api-eliminar-onu] EXITO | SN: {sn} | OLT: {olt}")
+            return jsonify({'success': True, 'resultado': str(texto)})
+        else:
+            logger.warning(f"[api-eliminar-onu] FALLO | SN: {sn} | OLT: {olt} | {texto}")
+            return jsonify({'success': False, 'resultado': str(texto)})
+    except Exception as e:
+        logger.error(f"[api-eliminar-onu] ERROR | SN: {sn} | {e}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+
 if __name__ == "__main__":
     start_streamlit()
     local_dev = os.getenv("LOCAL_DEV", "false").lower() == "true"
