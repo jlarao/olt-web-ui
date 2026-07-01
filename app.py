@@ -2180,9 +2180,21 @@ _BACKBONE_HOST = os.getenv('BACKBONE_HOST', '')
 
 
 @app.route('/api/health')
+@api_required
 def api_health():
-    """Endpoint público — usado por la app mobile para verificar conectividad."""
-    return jsonify({'status': 'ok'})
+    """Pinga el backbone y devuelve online/offline. Requiere Bearer token."""
+    host = _BACKBONE_HOST
+    if not host:
+        return jsonify({'status': 'unknown', 'error': 'BACKBONE_HOST no configurado'}), 503
+    import platform
+    is_windows = platform.system().lower() == 'windows'
+    cmd = ['ping', '-n', '5', '-w', '2000', host] if is_windows else ['ping', '-c', '5', '-W', '2', host]
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=20)
+        status = 'online' if result.returncode == 0 else 'offline'
+    except Exception:
+        status = 'offline'
+    return jsonify({'status': status, 'host': host})
 
 
 @app.route('/api/health/backbone')
