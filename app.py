@@ -2217,6 +2217,80 @@ def api_backbone_health():
     return jsonify({'status': status, 'host': host})
 
 
+@app.route('/agregar-fibra', methods=['GET'])
+@login_required
+def agregar_fibra_page():
+    return render_template('agregar_fibra.html')
+
+
+_ALLOWED_FIBRA_SHEETS = {"cuentas fibra", "cuentas fibra ma"}
+_ALLOWED_FIBRA_PORTS = {f"port {i}" for i in range(8)}
+
+
+@app.route('/api/agregar-fibra', methods=['POST'])
+@api_required
+def api_agregar_fibra():
+    import gspread
+    from oauth2client.service_account import ServiceAccountCredentials
+
+    data = request.get_json(silent=True) or {}
+    sheet_name = (data.get('sheet') or '').strip()
+    name = (data.get('name') or '').strip()
+    sn = (data.get('sn') or '').strip()
+    port = (data.get('port') or '').strip().lower()
+
+    if sheet_name not in _ALLOWED_FIBRA_SHEETS:
+        return jsonify({'error': 'Hoja no válida. Use "cuentas fibra" o "cuentas fibra ma"'}), 400
+    if not name:
+        return jsonify({'error': 'El campo name es requerido'}), 400
+    if not sn:
+        return jsonify({'error': 'El campo sn es requerido'}), 400
+    if port not in _ALLOWED_FIBRA_PORTS:
+        return jsonify({'error': 'Puerto no válido. Use "port 0" a "port 7"'}), 400
+
+    try:
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds = ServiceAccountCredentials.from_json_keyfile_name(
+            'react-elearning-e12a6-c869ba1c268d.json', scope
+        )
+        client = gspread.authorize(creds)
+        worksheet = client.open("Ingreso2024").worksheet(sheet_name)
+
+        all_values = worksheet.get_all_values()
+        if not all_values:
+            return jsonify({'error': 'La hoja está vacía'}), 500
+
+        headers = all_values[0]
+        try:
+            name_col = headers.index('name')
+            sn_col   = headers.index('sn')
+        except ValueError:
+            return jsonify({'error': 'No se encontraron las columnas "name" o "sn" en la hoja'}), 500
+
+        port_col = headers.index('port') if 'port' in headers else None
+
+        target_row = None
+        for i, row in enumerate(all_values[1:], start=2):
+            row_name = row[name_col].strip() if name_col < len(row) else ''
+            row_sn   = row[sn_col].strip()   if sn_col   < len(row) else ''
+            if not row_name and not row_sn:
+                target_row = i
+                break
+
+        if target_row is None:
+            return jsonify({'error': f'No hay filas disponibles (name y sn vacíos) en "{sheet_name}"'}), 404
+
+        worksheet.update_cell(target_row, name_col + 1, name)
+        worksheet.update_cell(target_row, sn_col + 1, sn)
+        if port_col is not None:
+            worksheet.update_cell(target_row, port_col + 1, port)
+
+        return jsonify({'success': True, 'message': f'Registro actualizado en fila {target_row} de "{sheet_name}"'})
+    except Exception as e:
+        logger.error(f"[api-agregar-fibra] Error: {e}")
+        return jsonify({'error': f'Error al agregar registro: {str(e)}'}), 500
+
+
 if __name__ == "__main__":
     start_streamlit()
     local_dev = os.getenv("LOCAL_DEV", "false").lower() == "true"
