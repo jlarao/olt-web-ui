@@ -1214,16 +1214,18 @@ def api_info_sn(sn):
                 if str(record.get("sn", "")).strip().upper() == sn_upper:
                     sheet_key = "fibra_ma" if ws_name == "cuentas fibra ma" else "fibra"
                     result = {
-                        "name":  record.get("name", ""),
-                        "sn":    record.get("sn", ""),
-                        "user":  record.get("user", ""),
-                        "port":  record.get("port", ""),
-                        "ont":   record.get("ont", ""),
-                        "sheet": sheet_key,
+                        "name":         record.get("name", ""),
+                        "sn":           record.get("sn", ""),
+                        "user":         record.get("user", ""),
+                        "port":         record.get("port", ""),
+                        "ont":          record.get("ont", ""),
+                        "service_port": record.get("service-port", ""),
+                        "sheet":        sheet_key,
                     }
                     logger.info(
                         f"[api-info-sn] Encontrado en '{ws_name}' | SN: {result['sn']} "
-                        f"| user: {result['user']} | port: {result['port']} | ont: {result['ont']}"
+                        f"| user: {result['user']} | port: {result['port']} | ont: {result['ont']} "
+                        f"| service_port: {result['service_port']}"
                     )
                     return jsonify(result), 200
     except Exception as e:
