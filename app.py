@@ -1174,10 +1174,99 @@ def buscar_sn(sn):
     return jsonify({"error": "ONT no encontrada"}), 404
 
 
+_GPON_PARAMS = [
+    "InternetGatewayDevice.WANDevice.1.X_GponInterafceConfig.RXPower",
+    "InternetGatewayDevice.WANDevice.1.X_GponInterafceConfig.TXPower",
+    "VirtualParameters.one",
+]
+
+_GPON_PROJECTION = ",".join([
+    "InternetGatewayDevice.WANDevice.1.X_GponInterafceConfig.RXPower",
+    "InternetGatewayDevice.WANDevice.1.X_GponInterafceConfig.TXPower",
+    "VirtualParameters.one",
+])
+
+def _refresh_gpon(device_id: str) -> dict:
+    """
+    Envía un getParameterValues al dispositivo vía GenieACS (connection_request).
+    Si el dispositivo responde (HTTP 200), lee los valores frescos y los devuelve.
+    Si el task queda encolado (HTTP 202) o falla, devuelve valores null con gpon_fresh=False.
+    """
+    import urllib.parse
+
+    _null = {"rx_power": None, "tx_power": None, "vp_txpower": None, "gpon_fresh": False}
+
+    device_id_enc = urllib.parse.quote(device_id, safe="")
+    task_url = f"{SERVER_ACS}/devices/{device_id_enc}/tasks"
+
+    try:
+        task_resp = _req.post(
+            task_url,
+            json={"name": "getParameterValues", "parameterNames": _GPON_PARAMS},
+            params={"connection_request": "", "timeout": 10000},
+            timeout=15,
+        )
+    except (_req.exceptions.ConnectionError, _req.exceptions.Timeout) as exc:
+        logger.warning(f"[refresh-gpon] No se pudo contactar GenieACS | device={device_id} | {exc}")
+        return _null
+
+    http_status = task_resp.status_code
+    logger.info(f"[refresh-gpon] task POST → HTTP {http_status} | device={device_id}")
+
+    if http_status not in (200, 201, 202):
+        logger.warning(f"[refresh-gpon] Task rechazado HTTP {http_status} | device={device_id}")
+        return _null
+
+    # 202 = encolado, dispositivo no respondió en el timeout → devolvemos null
+    if http_status == 202:
+        logger.warning(f"[refresh-gpon] Task encolado (ONU sin respuesta) | device={device_id}")
+        return _null
+
+    # 200/201 → dispositivo contestó; leemos los valores actualizados
+    try:
+        query = json.dumps({"_id": device_id})
+        read_resp = _req.get(
+            f"{SERVER_ACS}/devices",
+            params={"query": query, "projection": _GPON_PROJECTION, "limit": 1},
+            timeout=5,
+        )
+        read_resp.raise_for_status()
+        devices = read_resp.json()
+    except Exception as exc:
+        logger.warning(f"[refresh-gpon] Error leyendo valores GPON post-task | {exc}")
+        return _null
+
+    if not devices:
+        return _null
+
+    d = devices[0]
+    _gpon = ("InternetGatewayDevice", "WANDevice", "1", "X_GponInterafceConfig")
+
+    def _deep(node, *keys):
+        for k in keys:
+            if not isinstance(node, dict):
+                return None
+            node = node.get(k)
+        return node
+
+    rx_raw = _deep(d, *_gpon, "RXPower", "_value")
+    tx_raw = _deep(d, *_gpon, "TXPower", "_value")
+    vp_raw = _deep(d, "VirtualParameters", "one", "_value")
+
+    logger.info(f"[refresh-gpon] RX={rx_raw} TX={tx_raw} VP={vp_raw} | device={device_id}")
+
+    return {
+        "rx_power": rx_raw,
+        "tx_power": tx_raw,
+        "vp_txpower": vp_raw,
+        "gpon_fresh": True,
+    }
+
+
 @app.route("/buscar-acs/<sn>", methods=["GET"])
 @api_required
 def buscar_acs(sn):
-    """Busca un dispositivo en GenieACS por número de serie y devuelve su info."""
+    """Busca un dispositivo en GenieACS por número de serie, refresca señal GPON y devuelve su info."""
     sn_upper = sn.strip().upper()
     logger.info(f"[buscar-acs] Petición recibida | SN: {sn_upper} | IP: {request.remote_addr}")
 
@@ -1201,6 +1290,7 @@ def buscar_acs(sn):
             return jsonify({"error": "Dispositivo no encontrado en GenieACS"}), 404
 
         d = devices[0]
+        device_id = d.get("_id", "")
         dev_id_block = d.get("DeviceID", {})
 
         def _val(block, key):
@@ -1226,8 +1316,10 @@ def buscar_acs(sn):
         except (KeyError, TypeError):
             external_ip = None
 
+        gpon = _refresh_gpon(device_id)
+
         result = {
-            "id": d.get("_id", ""),
+            "id": device_id,
             "serial": serial,
             "model": model,
             "manufacturer": manufacturer,
@@ -1237,9 +1329,13 @@ def buscar_acs(sn):
             "tags": tags,
             "pppoe_user": pppoe_user,
             "external_ip": external_ip,
+            "rx_power": gpon["rx_power"],
+            "tx_power": gpon["tx_power"],
+            "vp_txpower": gpon["vp_txpower"],
+            "gpon_fresh": gpon["gpon_fresh"],
         }
 
-        logger.info(f"[buscar-acs] Encontrado | SN: {serial} | model: {model} | last_inform: {result['last_inform']}")
+        logger.info(f"[buscar-acs] OK | SN: {serial} | RX: {gpon['rx_power']} | TX: {gpon['tx_power']} | fresh: {gpon['gpon_fresh']}")
         return jsonify(result), 200
 
     except _req.exceptions.ConnectionError:
