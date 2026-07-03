@@ -1174,6 +1174,85 @@ def buscar_sn(sn):
     return jsonify({"error": "ONT no encontrada"}), 404
 
 
+@app.route("/buscar-acs/<sn>", methods=["GET"])
+@api_required
+def buscar_acs(sn):
+    """Busca un dispositivo en GenieACS por número de serie y devuelve su info."""
+    sn_upper = sn.strip().upper()
+    logger.info(f"[buscar-acs] Petición recibida | SN: {sn_upper} | IP: {request.remote_addr}")
+
+    try:
+        query = json.dumps({"DeviceID.SerialNumber": sn_upper})
+        projection = ",".join([
+            "DeviceID",
+            "_lastInform",
+            "_registered",
+            "Tags",
+            "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.Username",
+            "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.ExternalIPAddress",
+        ])
+        url = f"{SERVER_ACS}/devices"
+        resp = _req.get(url, params={"query": query, "projection": projection, "limit": 1}, timeout=5)
+        resp.raise_for_status()
+        devices = resp.json()
+
+        if not devices:
+            logger.warning(f"[buscar-acs] No encontrado | SN: {sn_upper}")
+            return jsonify({"error": "Dispositivo no encontrado en GenieACS"}), 404
+
+        d = devices[0]
+        dev_id_block = d.get("DeviceID", {})
+
+        def _val(block, key):
+            return (block.get(key) or {}).get("_value", "")
+
+        serial = _val(dev_id_block, "SerialNumber")
+        model = _val(dev_id_block, "ProductClass")
+        manufacturer = _val(dev_id_block, "Manufacturer")
+        oui = _val(dev_id_block, "OUI")
+
+        tags = [
+            k for k, v in (d.get("Tags") or {}).items()
+            if not k.startswith("_") and isinstance(v, dict) and v.get("_value") is True
+        ]
+
+        try:
+            pppoe_user = d["InternetGatewayDevice"]["WANDevice"]["1"]["WANConnectionDevice"]["2"]["WANPPPConnection"]["1"]["Username"]["_value"]
+        except (KeyError, TypeError):
+            pppoe_user = None
+
+        try:
+            external_ip = d["InternetGatewayDevice"]["WANDevice"]["1"]["WANConnectionDevice"]["2"]["WANPPPConnection"]["1"]["ExternalIPAddress"]["_value"]
+        except (KeyError, TypeError):
+            external_ip = None
+
+        result = {
+            "id": d.get("_id", ""),
+            "serial": serial,
+            "model": model,
+            "manufacturer": manufacturer,
+            "oui": oui,
+            "last_inform": d.get("_lastInform", ""),
+            "registered": d.get("_registered", ""),
+            "tags": tags,
+            "pppoe_user": pppoe_user,
+            "external_ip": external_ip,
+        }
+
+        logger.info(f"[buscar-acs] Encontrado | SN: {serial} | model: {model} | last_inform: {result['last_inform']}")
+        return jsonify(result), 200
+
+    except _req.exceptions.ConnectionError:
+        logger.error(f"[buscar-acs] No se puede conectar a GenieACS | URL: {SERVER_ACS}")
+        return jsonify({"error": "No se puede conectar a GenieACS"}), 503
+    except _req.exceptions.Timeout:
+        logger.error(f"[buscar-acs] Timeout al conectar con GenieACS | SN: {sn_upper}")
+        return jsonify({"error": "Timeout al conectar con GenieACS"}), 504
+    except Exception as e:
+        logger.exception(f"[buscar-acs] Error inesperado | SN: {sn_upper}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/info-sn/<sn>", methods=["GET"])
 @api_required
 def api_info_sn(sn):
