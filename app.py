@@ -1251,27 +1251,25 @@ def api_info_name(name):
         return jsonify({"error": "El nombre no puede estar vacío"}), 400
 
     def _token_similarity(a, b):
-        """SequenceMatcher entre dos tokens individuales (para tolerar typos como lopes/lopez)."""
+        """Similitud entre tokens. Premia prefijos (mari→maria, monte→montelongo)
+        y tolera typos (lopes→lopez) usando SequenceMatcher como fallback."""
+        if len(a) >= 3 and b.startswith(a):
+            return 0.92
         return SequenceMatcher(None, a, b).ratio()
 
     def relevance_score(record_name):
         """
         Scoring en capas:
-          1.0        — exacto completo
-          0.9        — el campo empieza con la búsqueda
-          0.7        — búsqueda contenida como substring
-          0.4–0.69   — intersección de tokens: cada palabra del query se busca
-                       en los tokens del campo con tolerancia a typos (>= 0.82),
-                       score = tokens_encontrados / tokens_query * 0.65
-          0–0.39     — SequenceMatcher global como último recurso
-          0          — descartado (ratio global < 0.35)
+          1.0      — exacto completo
+          0.9      — el campo empieza con la búsqueda
+          0.7      — búsqueda contenida como substring
+          0.4–0.65 — intersección de tokens: cada palabra del query se busca
+                     en los tokens del campo con tolerancia a typos (>= 0.82),
+                     score = tokens_encontrados / tokens_query * 0.65
+          0        — descartado (ninguna capa coincide)
 
-        Ejemplo: "jose lopes" encuentra "jose manuel lopes lopes"
-          tokens query : ["jose", "lopes"]
-          tokens campo : ["jose", "manuel", "lopes", "lopes"]
-          "jose"  → match exacto con "jose"  → cuenta
-          "lopes" → match exacto con "lopes" → cuenta
-          score = 2/2 * 0.65 = 0.65
+        No hay fallback global de SequenceMatcher: con queries cortos genera
+        falsos positivos por caracteres comunes (ej. "angel" matchea "Nancy Felix").
         """
         normalized = str(record_name).strip().lower()
         if normalized == query:
@@ -1294,9 +1292,7 @@ def api_info_name(name):
             if token_score > 0:
                 return token_score * 0.65
 
-        # Fallback: similitud global de caracteres
-        ratio = SequenceMatcher(None, query, normalized).ratio()
-        return ratio if ratio >= 0.35 else 0.0
+        return 0.0
 
     try:
         scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
