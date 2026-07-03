@@ -1272,13 +1272,16 @@ def buscar_acs(sn):
 
     try:
         query = json.dumps({"_id": {"$regex": sn_upper, "$options": "i"}})
+        _ppp_base = "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1"
         projection = ",".join([
             "DeviceID",
             "_lastInform",
             "_registered",
             "Tags",
-            "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.Username",
-            "InternetGatewayDevice.WANDevice.1.WANConnectionDevice.2.WANPPPConnection.1.ExternalIPAddress",
+            f"{_ppp_base}.Username",
+            f"{_ppp_base}.ExternalIPAddress",
+            f"{_ppp_base}.ConnectionStatus",
+            f"{_ppp_base}.X_HW_VLAN",
         ])
         url = f"{SERVER_ACS}/devices"
         resp = _req.get(url, params={"query": query, "projection": projection, "limit": 1}, timeout=5)
@@ -1306,15 +1309,16 @@ def buscar_acs(sn):
             if not k.startswith("_") and isinstance(v, dict) and v.get("_value") is True
         ]
 
-        try:
-            pppoe_user = d["InternetGatewayDevice"]["WANDevice"]["1"]["WANConnectionDevice"]["2"]["WANPPPConnection"]["1"]["Username"]["_value"]
-        except (KeyError, TypeError):
-            pppoe_user = None
+        def _ppp_val(key):
+            try:
+                return d["InternetGatewayDevice"]["WANDevice"]["1"]["WANConnectionDevice"]["2"]["WANPPPConnection"]["1"][key]["_value"]
+            except (KeyError, TypeError):
+                return None
 
-        try:
-            external_ip = d["InternetGatewayDevice"]["WANDevice"]["1"]["WANConnectionDevice"]["2"]["WANPPPConnection"]["1"]["ExternalIPAddress"]["_value"]
-        except (KeyError, TypeError):
-            external_ip = None
+        pppoe_user  = _ppp_val("Username")
+        external_ip = _ppp_val("ExternalIPAddress")
+        conn_status = _ppp_val("ConnectionStatus")
+        x_hw_vlan   = _ppp_val("X_HW_VLAN")
 
         gpon = _refresh_gpon(device_id)
 
@@ -1329,6 +1333,8 @@ def buscar_acs(sn):
             "tags": tags,
             "pppoe_user": pppoe_user,
             "external_ip": external_ip,
+            "conn_status": conn_status,
+            "vlan": x_hw_vlan,
             "rx_power": gpon["rx_power"],
             "tx_power": gpon["tx_power"],
             "vp_txpower": gpon["vp_txpower"],
