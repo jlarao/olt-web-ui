@@ -1236,6 +1236,121 @@ def api_info_sn(sn):
     return jsonify({"error": "ONT no encontrada"}), 404
 
 
+@app.route("/api/info-name/<path:name>", methods=["GET"])
+@api_required
+def api_info_name(name):
+    """Busca por nombre (coincidencia parcial) en el sheet. Devuelve lista ordenada por relevancia."""
+    import gspread
+    from oauth2client.service_account import ServiceAccountCredentials
+    from difflib import SequenceMatcher
+
+    query = name.strip().lower()
+    logger.info(f"[api-info-name] Petición recibida | name: {query} | IP: {request.remote_addr}")
+
+    if not query:
+        return jsonify({"error": "El nombre no puede estar vacío"}), 400
+
+    def _token_similarity(a, b):
+        """SequenceMatcher entre dos tokens individuales (para tolerar typos como lopes/lopez)."""
+        return SequenceMatcher(None, a, b).ratio()
+
+    def relevance_score(record_name):
+        """
+        Scoring en capas:
+          1.0        — exacto completo
+          0.9        — el campo empieza con la búsqueda
+          0.7        — búsqueda contenida como substring
+          0.4–0.69   — intersección de tokens: cada palabra del query se busca
+                       en los tokens del campo con tolerancia a typos (>= 0.82),
+                       score = tokens_encontrados / tokens_query * 0.65
+          0–0.39     — SequenceMatcher global como último recurso
+          0          — descartado (ratio global < 0.35)
+
+        Ejemplo: "jose lopes" encuentra "jose manuel lopes lopes"
+          tokens query : ["jose", "lopes"]
+          tokens campo : ["jose", "manuel", "lopes", "lopes"]
+          "jose"  → match exacto con "jose"  → cuenta
+          "lopes" → match exacto con "lopes" → cuenta
+          score = 2/2 * 0.65 = 0.65
+        """
+        normalized = str(record_name).strip().lower()
+        if normalized == query:
+            return 1.0
+        if normalized.startswith(query):
+            return 0.9
+        if query in normalized:
+            return 0.7
+
+        # Intersección de tokens con tolerancia a typos
+        query_tokens = query.split()
+        name_tokens = normalized.split()
+        if query_tokens and name_tokens:
+            matched = 0
+            for qt in query_tokens:
+                best = max(_token_similarity(qt, nt) for nt in name_tokens)
+                if best >= 0.82:
+                    matched += 1
+            token_score = matched / len(query_tokens)
+            if token_score > 0:
+                return token_score * 0.65
+
+        # Fallback: similitud global de caracteres
+        ratio = SequenceMatcher(None, query, normalized).ratio()
+        return ratio if ratio >= 0.35 else 0.0
+
+    try:
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds = ServiceAccountCredentials.from_json_keyfile_name(
+            'react-elearning-e12a6-c869ba1c268d.json', scope
+        )
+        client = gspread.authorize(creds)
+    except FileNotFoundError:
+        logger.error("[api-info-name] Archivo de credenciales de Google no encontrado")
+        return jsonify({"error": "Credenciales de Google no configuradas"}), 503
+    except Exception as e:
+        logger.error(f"[api-info-name] Error al autenticar con Google: {e}")
+        return jsonify({"error": "Error al conectar con Google Sheets"}), 503
+
+    try:
+        spreadsheet = client.open("Ingreso2024")
+    except Exception as e:
+        logger.error(f"[api-info-name] No se pudo abrir el spreadsheet: {e}")
+        return jsonify({"error": "No se pudo abrir el spreadsheet"}), 503
+
+    matches = []
+    try:
+        for ws_name in ["cuentas fibra", "cuentas fibra ma"]:
+            sheet_key = "fibra_ma" if ws_name == "cuentas fibra ma" else "fibra"
+            records = spreadsheet.worksheet(ws_name).get_all_records()
+            for record in records:
+                score = relevance_score(record.get("name", ""))
+                if score > 0:
+                    matches.append({
+                        "_score": score,
+                        "name":         record.get("name", ""),
+                        "sn":           record.get("sn", ""),
+                        "user":         record.get("user", ""),
+                        "port":         record.get("port", ""),
+                        "ont":          record.get("ont", ""),
+                        "service_port": record.get("service-port", ""),
+                        "sheet":        sheet_key,
+                    })
+    except Exception as e:
+        logger.error(f"[api-info-name] Error al leer el sheet: {e}")
+        return jsonify({"error": "Error al leer los datos del sheet"}), 500
+
+    if not matches:
+        logger.warning(f"[api-info-name] Sin resultados | query: {query}")
+        return jsonify({"error": "No se encontraron coincidencias"}), 404
+
+    matches.sort(key=lambda r: r["_score"], reverse=True)
+    for m in matches:
+        del m["_score"]
+
+    logger.info(f"[api-info-name] {len(matches)} resultado(s) | query: {query}")
+    return jsonify(matches), 200
+
+
 @app.route("/alta-ont-gs", methods=["POST"])
 # @login_required
 def alta_ont_web_gs():
