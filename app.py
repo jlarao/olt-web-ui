@@ -1182,7 +1182,7 @@ def buscar_acs(sn):
     logger.info(f"[buscar-acs] Petición recibida | SN: {sn_upper} | IP: {request.remote_addr}")
 
     try:
-        query = json.dumps({"DeviceID.SerialNumber": sn_upper})
+        query = json.dumps({"_id": {"$regex": sn_upper, "$options": "i"}})
         projection = ",".join([
             "DeviceID",
             "_lastInform",
