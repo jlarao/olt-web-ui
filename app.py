@@ -1417,6 +1417,116 @@ def api_info_sn(sn):
     return jsonify({"error": "ONT no encontrada"}), 404
 
 
+@app.route("/api/sheet", methods=["GET"])
+@api_required
+def api_sheet():
+    """Versión JSON de /sheet para la app mobile: devuelve los primeros N registros (10 por defecto)."""
+    import gspread
+    from oauth2client.service_account import ServiceAccountCredentials
+
+    try:
+        limit = int(request.args.get("limit", 10))
+    except ValueError:
+        limit = 10
+    limit = max(1, min(limit, 100))
+
+    logger.info(f"[api-sheet] Petición recibida | limit: {limit} | IP: {request.remote_addr}")
+
+    try:
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds = ServiceAccountCredentials.from_json_keyfile_name(
+            'react-elearning-e12a6-c869ba1c268d.json', scope
+        )
+        client = gspread.authorize(creds)
+        sheet = client.open("Ingreso2024").worksheet("cuentas fibra")
+    except FileNotFoundError:
+        logger.error("[api-sheet] Archivo de credenciales de Google no encontrado")
+        return jsonify({"error": "Credenciales de Google no configuradas"}), 503
+    except Exception as e:
+        logger.error(f"[api-sheet] Error al conectar con Google Sheets: {e}")
+        return jsonify({"error": "Error al conectar con Google Sheets"}), 503
+
+    try:
+        records = sheet.get_all_records()
+    except Exception as e:
+        logger.error(f"[api-sheet] Error al leer el sheet: {e}")
+        return jsonify({"error": "Error al leer los datos del sheet"}), 500
+
+    recfill = []
+    for record in records:
+        if record.get('sn', '') == '':
+            continue
+        recfill.append({
+            "name":         record.get("name", ""),
+            "sn":           record.get("sn", ""),
+            "user":         record.get("user", ""),
+            "port":         record.get("port", ""),
+            "ont":          record.get("ont", ""),
+            "service_port": record.get("service-port", ""),
+            "sheet":        "fibra",
+        })
+        if len(recfill) >= limit:
+            break
+
+    logger.info(f"[api-sheet] {len(recfill)} resultado(s) devueltos")
+    return jsonify(recfill), 200
+
+
+@app.route("/api/sheet-ma", methods=["GET"])
+@api_required
+def api_sheet_ma():
+    """Versión JSON de /sheet_ma para la app mobile: devuelve los primeros N registros (10 por defecto)."""
+    import gspread
+    from oauth2client.service_account import ServiceAccountCredentials
+
+    try:
+        limit = int(request.args.get("limit", 10))
+    except ValueError:
+        limit = 10
+    limit = max(1, min(limit, 100))
+
+    logger.info(f"[api-sheet-ma] Petición recibida | limit: {limit} | IP: {request.remote_addr}")
+
+    try:
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds = ServiceAccountCredentials.from_json_keyfile_name(
+            'react-elearning-e12a6-c869ba1c268d.json', scope
+        )
+        client = gspread.authorize(creds)
+        sheet = client.open("Ingreso2024").worksheet("cuentas fibra ma")
+    except FileNotFoundError:
+        logger.error("[api-sheet-ma] Archivo de credenciales de Google no encontrado")
+        return jsonify({"error": "Credenciales de Google no configuradas"}), 503
+    except Exception as e:
+        logger.error(f"[api-sheet-ma] Error al conectar con Google Sheets: {e}")
+        return jsonify({"error": "Error al conectar con Google Sheets"}), 503
+
+    try:
+        records = sheet.get_all_records()
+    except Exception as e:
+        logger.error(f"[api-sheet-ma] Error al leer el sheet: {e}")
+        return jsonify({"error": "Error al leer los datos del sheet"}), 500
+
+    recfill = []
+    for record in records:
+        if record.get('sn', '') == '':
+            continue
+        recfill.append({
+            "name":         record.get("name", ""),
+            "sn":           record.get("sn", ""),
+            "user":         record.get("user", ""),
+            "port":         record.get("port", ""),
+            "ont":          record.get("ont", ""),
+            "service_port": record.get("service-port", ""),
+            "sheet":        "fibra_ma",
+        })
+        if len(recfill) >= limit:
+            break
+
+    logger.info(f"[api-sheet-ma] {len(recfill)} resultado(s) devueltos")
+    return jsonify(recfill), 200
+
+
 @app.route("/api/info-name/<path:name>", methods=["GET"])
 @api_required
 def api_info_name(name):
@@ -2753,6 +2863,145 @@ def api_eliminar_onu():
     except Exception as e:
         logger.error(f"[api-eliminar-onu] ERROR | SN: {sn} | {e}")
         return jsonify({'success': False, 'error': str(e)}), 500
+
+
+@app.route('/api/cambiar-onu', methods=['POST'])
+@api_required
+def api_cambiar_onu():
+    """
+    Reemplaza el equipo ONU de un cliente existente: da de baja el SN anterior,
+    registra el SN nuevo en el MISMO puerto/ONT ID/service-port/PPPoE/perfil, y
+    actualiza el SN en la hoja de cálculo. Requiere Bearer token.
+    """
+    import gspread
+    from oauth2client.service_account import ServiceAccountCredentials
+
+    data = request.get_json(silent=True) or {}
+
+    frame = 0
+    slot  = 1
+    sn_anterior = str(data.get('sn_anterior', '')).strip().upper()
+    sn_nuevo    = str(data.get('sn_nuevo', '')).strip().upper()
+    port        = str(data.get('port', '')).strip()
+    ontid       = str(data.get('ontid', '')).strip()
+    sp          = str(data.get('sp', '')).strip()
+    pppoe       = str(data.get('pppoe', '')).strip()
+    desc        = str(data.get('desc', '')).strip()
+    profile     = str(data.get('profile', '25M')).strip()
+
+    if not all([sn_anterior, sn_nuevo, port, ontid, sp, pppoe, desc]):
+        logger.warning("api_cambiar_onu: faltan campos requeridos | data=%s", data)
+        return jsonify({'success': False, 'stage': 'validation', 'error': 'Faltan campos requeridos'}), 400
+
+    if sn_anterior == sn_nuevo:
+        return jsonify({'success': False, 'stage': 'validation', 'error': 'El SN nuevo debe ser diferente al SN anterior'}), 400
+
+    olt = str(data.get('olt', 'EA')).strip().upper()
+    if olt not in ('EA', 'MA'):
+        olt = 'EA'
+    sheet_name = 'cuentas fibra ma' if olt == 'MA' else 'cuentas fibra'
+
+    logger.info(
+        "api_cambiar_onu: INICIO | olt=%s sn_anterior=%s sn_nuevo=%s port=%s ontid=%s sp=%s pppoe=%s",
+        olt, sn_anterior, sn_nuevo, port, ontid, sp, pppoe
+    )
+
+    # --- 0. Validar en la hoja: sn_anterior debe existir, sn_nuevo no debe estar en uso ---
+    try:
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds = ServiceAccountCredentials.from_json_keyfile_name(
+            'react-elearning-e12a6-c869ba1c268d.json', scope
+        )
+        client = gspread.authorize(creds)
+        worksheet = client.open("Ingreso2024").worksheet(sheet_name)
+        all_values = worksheet.get_all_values()
+        headers = all_values[0]
+        sn_col = headers.index('sn')
+    except Exception as e:
+        logger.error(f"[api-cambiar-onu] Error al abrir la hoja '{sheet_name}': {e}")
+        return jsonify({'success': False, 'stage': 'validation', 'error': f'No se pudo abrir la hoja: {e}'}), 503
+
+    target_row = None
+    for i, row in enumerate(all_values[1:], start=2):
+        row_sn = row[sn_col].strip().upper() if sn_col < len(row) else ''
+        if row_sn == sn_nuevo:
+            return jsonify({
+                'success': False, 'stage': 'validation',
+                'error': f'El SN nuevo ({sn_nuevo}) ya está registrado en la hoja "{sheet_name}"'
+            }), 409
+        if row_sn == sn_anterior:
+            target_row = i
+
+    if target_row is None:
+        return jsonify({
+            'success': False, 'stage': 'validation',
+            'error': f'El SN anterior ({sn_anterior}) no se encontró en la hoja "{sheet_name}"'
+        }), 404
+
+    # --- 1. Telnet: dar de baja la ONT con el SN anterior ---
+    try:
+        if olt == 'MA':
+            del_ok, del_texto = delete_ont_sn_ma(sn_anterior)
+        else:
+            del_ok, del_texto = delete_ont_sn(sn_anterior)
+    except Exception as e:
+        logger.error(f"[api-cambiar-onu] ERROR en baja | SN: {sn_anterior} | {e}")
+        return jsonify({'success': False, 'stage': 'delete', 'error': str(e)}), 500
+
+    if not del_ok:
+        logger.warning(f"[api-cambiar-onu] FALLO baja | SN: {sn_anterior} | OLT: {olt} | {del_texto}")
+        return jsonify({'success': False, 'stage': 'delete', 'resultado': str(del_texto)})
+
+    logger.info(f"[api-cambiar-onu] Baja OK | SN: {sn_anterior} | OLT: {olt}")
+
+    # --- 2. Telnet: registrar la ONT con el SN nuevo, mismo puerto/ontid/service-port ---
+    if olt == 'MA':
+        tn, resultado = alta_ont_version_three_ma(frame, slot, port, ontid, sn_nuevo, desc, sp)
+    else:
+        tn, resultado = alta_ont_version_three(frame, slot, port, ontid, sn_nuevo, desc, sp)
+
+    if tn is None or any(x in str(resultado) for x in ('Error', 'Failure', 'failure')):
+        if tn is not None:
+            try:
+                tn.close()
+            except Exception:
+                pass
+        logger.error(
+            "api_cambiar_onu: FALLO alta | olt=%s sn_anterior=%s sn_nuevo=%s resultado=%s",
+            olt, sn_anterior, sn_nuevo, resultado
+        )
+        return jsonify({
+            'success': False, 'stage': 'add',
+            'error': 'La ONU anterior ya fue dada de baja pero el registro de la nueva falló. '
+                     'El cliente se quedó sin servicio: reintente el alta manualmente con estos mismos datos.',
+            'resultado': str(resultado),
+        })
+
+    time.sleep(10)
+    _, out = send_cmd_telnet_add_onu_two(tn, "save\r\n")
+    time.sleep(0.3)
+    tn.close()
+    call_mkt(pppoe, profile, desc)
+    logger.info(
+        "api_cambiar_onu: alta OK | olt=%s sn_nuevo=%s ontid=%s sp=%s pppoe=%s",
+        olt, sn_nuevo, ontid, sp, pppoe
+    )
+
+    # --- 3. Actualizar el SN en la hoja (misma fila, mismos demás campos) ---
+    try:
+        worksheet.update_cell(target_row, sn_col + 1, sn_nuevo)
+        logger.info(f"[api-cambiar-onu] Hoja actualizada | fila {target_row} | SN: {sn_anterior} -> {sn_nuevo}")
+    except Exception as e:
+        logger.error(f"[api-cambiar-onu] ERROR al actualizar la hoja | {e}")
+        return jsonify({
+            'success': False, 'stage': 'sheet_update',
+            'error': f'El OLT quedó configurado correctamente con el SN nuevo, pero no se pudo actualizar '
+                     f'la hoja: {e}. Corrige manualmente la fila del cliente en "{sheet_name}".',
+            'resultado': str(resultado),
+        })
+
+    logger.info(f"api_cambiar_onu: EXITO COMPLETO | olt={olt} sn_anterior={sn_anterior} sn_nuevo={sn_nuevo}")
+    return jsonify({'success': True, 'stage': 'done', 'resultado': str(resultado)})
 
 
 if __name__ == "__main__":
