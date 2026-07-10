@@ -1,0 +1,23 @@
+[Unit]
+Description=OLT NOC Dashboard (Streamlit)
+After=network.target
+
+[Service]
+WorkingDirectory=/home/pisujo/olt-web-ui-huawei
+ExecStart=/home/pisujo/venv/bin/python3 -m streamlit run dashboard/app.py \
+  --server.port 8501 \
+  --server.headless true \
+  --server.enableCORS false \
+  --server.enableXsrfProtection false \
+  --browser.gatherUsageStats false \
+  --server.sslCertFile /home/pisujo/olt-web-ui-huawei/fullchain.pem \
+  --server.sslKeyFile /home/pisujo/olt-web-ui-huawei/privkey.pem \
+  --server.baseUrlPath /noc-dash
+Restart=always
+RestartSec=5
+Environment=PATH=/home/pisujo/venv/bin:/usr/bin
+EnvironmentFile=/home/pisujo/olt-web-ui-huawei/.env
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

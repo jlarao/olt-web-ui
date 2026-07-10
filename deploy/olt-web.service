@@ -1,0 +1,19 @@
+[Unit]
+Description=OLT Web UI (gunicorn)
+After=network.target
+
+[Service]
+WorkingDirectory=/home/pisujo/olt-web-ui-huawei
+ExecStart=/home/pisujo/venv/bin/gunicorn \
+  --workers 1 --threads 16 --worker-class gthread \
+  --timeout 120 --graceful-timeout 30 --keep-alive 5 \
+  --certfile fullchain.pem --keyfile privkey.pem \
+  --bind 0.0.0.0:8080 app:app
+Restart=always
+RestartSec=5
+Environment=PATH=/home/pisujo/venv/bin:/usr/bin
+EnvironmentFile=/home/pisujo/olt-web-ui-huawei/.env
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target
