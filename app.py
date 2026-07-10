@@ -381,13 +381,15 @@ def load_user(user_id):
 @app.route("/", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
-        username = request.form["username"]
-        password = request.form["password"]
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        if not username or not password:
+            return render_template("login.html", error="usuario y contraseña requeridos")
         user = User.get(username)
-        if user and check_password_hash(user.password_hash, password):
-            login_user(user)
-            return redirect("/dashboard")
-        return render_template("login.html", error="Credenciales incorrectas")
+        if not user or not check_password_hash(user.password_hash, password):
+            return render_template("login.html", error="Credenciales incorrectas")
+        login_user(user)
+        return redirect("/dashboard")
     return render_template("login.html")
 
 @app.route("/dashboard")

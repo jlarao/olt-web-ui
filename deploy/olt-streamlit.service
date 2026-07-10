@@ -4,15 +4,17 @@ After=network.target
 
 [Service]
 WorkingDirectory=/home/pisujo/olt-web-ui-huawei
+# STREAMLIT_PORT y STREAMLIT_BASE_PATH vienen del .env (EnvironmentFile).
+# STREAMLIT_PORT debe ser el puerto real de Streamlit (8502), NO el de nginx (8501).
 ExecStart=/home/pisujo/venv/bin/python3 -m streamlit run dashboard/app.py \
-  --server.port 8501 \
+  --server.port ${STREAMLIT_PORT} \
   --server.headless true \
   --server.enableCORS false \
   --server.enableXsrfProtection false \
   --browser.gatherUsageStats false \
   --server.sslCertFile /home/pisujo/olt-web-ui-huawei/fullchain.pem \
   --server.sslKeyFile /home/pisujo/olt-web-ui-huawei/privkey.pem \
-  --server.baseUrlPath /noc-dash
+  --server.baseUrlPath ${STREAMLIT_BASE_PATH}
 Restart=always
 RestartSec=5
 Environment=PATH=/home/pisujo/venv/bin:/usr/bin
