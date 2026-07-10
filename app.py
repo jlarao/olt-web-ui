@@ -1420,7 +1420,7 @@ def api_info_sn(sn):
 @app.route("/api/sheet", methods=["GET"])
 @api_required
 def api_sheet():
-    """Versión JSON de /sheet para la app mobile: devuelve los primeros N registros (10 por defecto)."""
+    """Versión JSON de /sheet para la app mobile: devuelve los últimos N registros (10 por defecto), más reciente primero."""
     import gspread
     from oauth2client.service_account import ServiceAccountCredentials
 
@@ -1453,7 +1453,7 @@ def api_sheet():
         return jsonify({"error": "Error al leer los datos del sheet"}), 500
 
     recfill = []
-    for record in records:
+    for record in reversed(records):
         if record.get('sn', '') == '':
             continue
         recfill.append({
@@ -1475,7 +1475,7 @@ def api_sheet():
 @app.route("/api/sheet-ma", methods=["GET"])
 @api_required
 def api_sheet_ma():
-    """Versión JSON de /sheet_ma para la app mobile: devuelve los primeros N registros (10 por defecto)."""
+    """Versión JSON de /sheet_ma para la app mobile: devuelve los últimos N registros (10 por defecto), más reciente primero."""
     import gspread
     from oauth2client.service_account import ServiceAccountCredentials
 
@@ -1508,7 +1508,7 @@ def api_sheet_ma():
         return jsonify({"error": "Error al leer los datos del sheet"}), 500
 
     recfill = []
-    for record in records:
+    for record in reversed(records):
         if record.get('sn', '') == '':
             continue
         recfill.append({
