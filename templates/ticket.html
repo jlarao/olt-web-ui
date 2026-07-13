@@ -18,8 +18,9 @@
 
         /* El ticket se imprime desde el navegador: la impresora térmica debe
            estar instalada como impresora normal en esta computadora (no en
-           el servidor). @page ajusta el papel a 58mm y en impresión se oculta
-           todo menos el ticket. */
+           el servidor). @page ajusta el papel a 5.5cm y en impresión se oculta
+           todo menos el ticket. Tamaños en pt (no px) porque son los que el
+           navegador respeta de forma consistente al imprimir. */
         @media print {
             body * { visibility: hidden; }
             .ticket, .ticket * { visibility: visible; }
@@ -27,17 +28,21 @@
                 position: absolute;
                 top: 0;
                 left: 0;
-                width: 58mm;
+                width: 5.5cm;
                 max-width: none;
                 margin: 0;
-                padding: 2mm;
+                padding: 1mm 1.5mm;
                 border: none;
-                font-size: 11px;
+                font-size: 17pt;
+                font-weight: 600;
+                line-height: 1.3;
             }
-            .ticket .monto { font-size: 1.3rem; }
+            .ticket .empresa { font-size: 19pt; }
+            .ticket hr { margin: 1.5mm 0; }
+            .ticket .monto { font-size: 40pt; font-weight: 700; margin: 1.5mm 0; }
         }
         @page {
-            size: 58mm auto;
+            size: 5.5cm auto;
             margin: 0;
         }
     </style>
@@ -50,10 +55,10 @@
     </div>
 
     <div class="ticket text-center mt-3">
-        <div class="fw-bold">{{ ticket_empresa if ticket_empresa else 'Recibo de pago' }}</div>
+        <div class="fw-bold empresa">{{ ticket_empresa if ticket_empresa else 'Recibo de pago' }}</div>
         <div>Recibo de pago</div>
         <hr>
-        <div class="text-start">
+        <div class="text-start fw-bold">
             <div>Folio: {{ pago.id }}</div>
             <div>Fecha: {{ pago.fecha_pago }}</div>
             <div>Cliente: {{ pago.cliente_nombre }} {{ pago.cliente_apellidos }}</div>
