@@ -1,0 +1,511 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Pagos</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+</head>
+<body class="bg-light">
+<div class="container-fluid mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="mb-0">Pagos</h4>
+        <div>
+            <a href="/clientes" class="btn btn-sm btn-outline-secondary">Clientes</a>
+            <a href="/dashboard" class="btn btn-sm btn-outline-secondary">← Dashboard</a>
+        </div>
+    </div>
+
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        {% for msg in messages %}
+          <div class="alert alert-info alert-dismissible fade show py-2" role="alert">
+            {{ msg }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+          </div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <!-- Hoja activa -->
+    <div class="card mb-4">
+        <div class="card-header py-2 bg-secondary text-white fw-semibold">
+            Hoja de Google Sheets activa
+        </div>
+        <div class="card-body">
+            {% if not hoja_activa %}
+                <div class="alert alert-warning py-2">
+                    Aún no hay una hoja configurada. Selecciona una existente o crea una nueva y guárdala como
+                    predeterminada antes de registrar pagos.
+                </div>
+            {% endif %}
+            <form method="POST" action="/pagos/configurar-hoja" class="row g-2 align-items-start">
+                <div class="col-md-4">
+                    <label class="form-label">Hoja existente</label>
+                    <select class="form-select" name="hoja_existente" id="hoja_existente">
+                        <option value="">— Selecciona —</option>
+                        {% for h in hojas_disponibles %}
+                        <option value="{{ h }}" {{ 'selected' if h == hoja_activa }}>{{ h }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <div class="form-check">
+                        <input type="checkbox" class="form-check-input" id="crear_nueva" name="crear_nueva" value="1">
+                        <label class="form-check-label" for="crear_nueva">Crear nueva hoja</label>
+                    </div>
+                    <input type="text" class="form-control mt-1" name="hoja_nueva" id="hoja_nueva"
+                           placeholder="ej. julio_2026" disabled>
+                </div>
+                <div class="col-md-2 pt-4">
+                    <button type="submit" class="btn btn-primary">Guardar como predeterminada</button>
+                </div>
+                <div class="col-md-2 pt-4 text-md-end">
+                    {% if hoja_activa %}
+                        <span class="badge bg-success">Activa: {{ hoja_activa }}</span>
+                    {% else %}
+                        <span class="badge bg-danger">Sin hoja</span>
+                    {% endif %}
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+    (function () {
+        var chk = document.getElementById('crear_nueva');
+        var selectHoja = document.getElementById('hoja_existente');
+        var inputNueva = document.getElementById('hoja_nueva');
+        chk.addEventListener('change', function () {
+            inputNueva.disabled = !chk.checked;
+            selectHoja.disabled = chk.checked;
+            if (chk.checked) { inputNueva.focus(); }
+        });
+    })();
+    </script>
+
+    <!-- Registrar pago -->
+    <div class="card mb-4">
+        <div class="card-header py-2 bg-primary text-white fw-semibold">
+            Registrar pago
+        </div>
+        <div class="card-body">
+            <form method="POST" action="/pagos/registrar" id="form-pago">
+                <div class="row g-3">
+                    <div class="col-md-4 position-relative">
+                        <label class="form-label">Cliente <span class="text-danger">*</span></label>
+                        <div class="input-group">
+                            <input type="text" class="form-control" id="cliente_buscar" autocomplete="off"
+                                   placeholder="Buscar por nombre, apellido o usuario (ej. ma her)">
+                            <button type="button" class="btn btn-outline-secondary" id="btn-ver-historial" disabled>
+                                Ver pagos pasados
+                            </button>
+                        </div>
+                        <input type="hidden" name="cliente_id" id="cliente_id">
+                        <div class="invalid-feedback">Selecciona un cliente de la lista de resultados</div>
+                        <div id="cliente_resultados" class="list-group position-absolute w-100 shadow-sm"
+                             style="z-index:1000; max-height:220px; overflow-y:auto; display:none;"></div>
+                        <div class="form-text" id="cliente_plan_info">&nbsp;</div>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">Monto del plan <span class="text-danger">*</span></label>
+                        <input type="number" step="0.01" min="0" class="form-control" name="monto_base"
+                               id="monto_base" required>
+                    </div>
+                    <div class="col-md-1">
+                        <label class="form-label">Cant.</label>
+                        <input type="number" step="1" min="1" class="form-control" name="cantidad"
+                               id="cantidad" value="1">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">Descuento</label>
+                        <select class="form-select" name="descuento_tipo" id="descuento_tipo">
+                            <option value="">Sin descuento</option>
+                            <option value="monto">Monto ($)</option>
+                            <option value="porcentaje">Porcentaje (%)</option>
+                        </select>
+                    </div>
+                    <div class="col-md-1">
+                        <label class="form-label">Valor</label>
+                        <input type="number" step="0.01" min="0" class="form-control" name="descuento_valor"
+                               id="descuento_valor" value="0" disabled>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">Total a cobrar</label>
+                        <input type="text" class="form-control fw-bold" id="monto_total_preview" readonly
+                               tabindex="-1">
+                        <input type="hidden" name="monto" id="monto_total">
+                    </div>
+
+                    <div class="col-md-3">
+                        <label class="form-label">Forma de pago <span class="text-danger">*</span></label>
+                        <select class="form-select" name="forma_pago" required>
+                            <option value="Efectivo">Efectivo</option>
+                            <option value="Transferencia">Transferencia</option>
+                            <option value="Tarjeta">Tarjeta</option>
+                            <option value="Depósito">Depósito</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Periodo que cubre</label>
+                        <select class="form-select" name="periodo_inicio" id="periodo_inicio">
+                            {% for p in periodo_opciones %}
+                            <option value="{{ p }}" {{ 'selected' if p == periodo_default }}>{{ p }}</option>
+                            {% endfor %}
+                        </select>
+                        <input type="hidden" name="periodo" id="periodo_hidden">
+                        <div class="form-text" id="periodo_preview"></div>
+                    </div>
+                    <div class="col-12" id="aviso_traslape" style="display:none;">
+                        <div class="alert alert-warning py-2 mb-2">
+                            <div id="aviso_traslape_texto"></div>
+                            <div class="form-check mt-1">
+                                <input type="checkbox" class="form-check-input" id="confirmar_duplicado_check">
+                                <label class="form-check-label" for="confirmar_duplicado_check">
+                                    Registrar de todas formas
+                                </label>
+                            </div>
+                        </div>
+                        <input type="hidden" name="confirmar_duplicado" id="confirmar_duplicado" value="0">
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label">Notas</label>
+                        <input type="text" class="form-control" name="notas" placeholder="opcional">
+                    </div>
+                    <div class="col-12">
+                        <button type="submit" class="btn btn-success">Registrar pago</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Últimos pagos -->
+    <div class="card mb-4">
+        <div class="card-header py-2 d-flex justify-content-between align-items-center">
+            <span class="fw-semibold">Últimos pagos</span>
+            <span class="badge bg-secondary">{{ pagos|length }}</span>
+        </div>
+        <div class="card-body p-0">
+            <table class="table table-sm table-hover mb-0">
+                <thead class="table-light">
+                    <tr>
+                        <th>Folio</th>
+                        <th>Fecha</th>
+                        <th>Cliente</th>
+                        <th>Cant.</th>
+                        <th>Monto</th>
+                        <th>Forma de pago</th>
+                        <th>Periodo</th>
+                        <th>Registró</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                {% for p in pagos %}
+                <tr>
+                    <td class="text-muted">{{ p.id }}</td>
+                    <td>{{ p.fecha_pago }}</td>
+                    <td>{{ p.cliente_nombre }} {{ p.cliente_apellidos }}</td>
+                    <td>{{ p.cantidad or 1 }}</td>
+                    <td>${{ '%.2f'|format(p.monto) }}</td>
+                    <td>{{ p.forma_pago }}</td>
+                    <td>{{ p.periodo or '—' }}</td>
+                    <td>{{ p.registrado_por }}</td>
+                    <td class="text-end">
+                        <a href="/pagos/ticket/{{ p.id }}" class="btn btn-sm btn-outline-primary py-0">Ver ticket</a>
+                    </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="9" class="text-center text-muted py-3">No hay pagos registrados</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: historial de pagos del cliente seleccionado -->
+<div class="modal fade" id="modalHistorial" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="modalHistorialTitulo">Pagos pasados</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="modalHistorialContenido">
+                    <p class="text-muted mb-0">Cargando...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+(function () {
+    var clientes = {{ clientes|tojson }};
+
+    function normalizar(s) {
+        return (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+    }
+
+    // Cada cliente se indexa como una lista de "palabras" (nombre, apellidos,
+    // usuario) para poder buscar por patrones tipo "ma her" -> maria hernandez.
+    var clientesIdx = clientes.map(function (cl) {
+        var texto = normalizar(cl.nombre + ' ' + cl.apellidos + ' ' + cl.user_name);
+        return { cliente: cl, tokens: texto.split(/[\s._-]+/).filter(Boolean) };
+    });
+
+    function etiqueta(cl) {
+        return cl.nombre + ' ' + cl.apellidos + (cl.user_name ? ' — ' + cl.user_name : '');
+    }
+
+    function buscar(query) {
+        var qTokens = normalizar(query).split(/\s+/).filter(Boolean);
+        if (!qTokens.length) return [];
+        return clientesIdx
+            .filter(function (item) {
+                return qTokens.every(function (qt) {
+                    return item.tokens.some(function (t) { return t.indexOf(qt) === 0; });
+                });
+            })
+            .map(function (item) { return item.cliente; });
+    }
+
+    var input = document.getElementById('cliente_buscar');
+    var hidden = document.getElementById('cliente_id');
+    var resultados = document.getElementById('cliente_resultados');
+    var montoBaseInput = document.getElementById('monto_base');
+    var planInfo = document.getElementById('cliente_plan_info');
+
+    function ocultarResultados() {
+        resultados.style.display = 'none';
+        resultados.innerHTML = '';
+    }
+
+    function mostrarResultados(lista) {
+        resultados.innerHTML = '';
+        if (!lista.length) {
+            resultados.innerHTML = '<div class="list-group-item text-muted small">Sin coincidencias</div>';
+            resultados.style.display = 'block';
+            return;
+        }
+        lista.slice(0, 8).forEach(function (cl) {
+            var item = document.createElement('button');
+            item.type = 'button';
+            item.className = 'list-group-item list-group-item-action py-1';
+            item.textContent = etiqueta(cl);
+            item.addEventListener('mousedown', function (e) {
+                // mousedown (antes que blur) para que el clic sí registre la selección
+                e.preventDefault();
+                hidden.value = cl.id;
+                input.value = etiqueta(cl);
+                input.classList.remove('is-invalid');
+                ocultarResultados();
+
+                if (cl.plan_precio !== null && cl.plan_precio !== undefined) {
+                    montoBaseInput.value = Number(cl.plan_precio).toFixed(2);
+                    planInfo.textContent = 'Plan: ' + (cl.plan_nombre || '—') +
+                        ' — $' + Number(cl.plan_precio).toFixed(2) + '/mes';
+                } else {
+                    planInfo.textContent = 'Sin plan asignado: ingresa el monto manualmente';
+                }
+                recalcularTotal();
+
+                btnHistorial.disabled = true;
+                cargarHistorial(cl.id, function () {
+                    btnHistorial.disabled = false;
+                    seleccionarProximoPeriodo();
+                });
+            });
+            resultados.appendChild(item);
+        });
+        resultados.style.display = 'block';
+    }
+
+    input.addEventListener('input', function () {
+        hidden.value = '';
+        input.classList.remove('is-invalid');
+        var q = input.value.trim();
+        if (!q) { ocultarResultados(); return; }
+        mostrarResultados(buscar(q));
+    });
+
+    input.addEventListener('focus', function () {
+        if (input.value.trim()) { mostrarResultados(buscar(input.value.trim())); }
+    });
+
+    input.addEventListener('blur', function () {
+        setTimeout(ocultarResultados, 150);
+    });
+
+    input.closest('form').addEventListener('submit', function (e) {
+        if (!hidden.value) {
+            e.preventDefault();
+            input.classList.add('is-invalid');
+            input.focus();
+        }
+    });
+
+    // ── Cantidad, descuento y total a cobrar ────────────────────────────
+    var cantidadInput = document.getElementById('cantidad');
+    var descuentoTipo = document.getElementById('descuento_tipo');
+    var descuentoValor = document.getElementById('descuento_valor');
+    var montoTotalPreview = document.getElementById('monto_total_preview');
+    var montoTotalHidden = document.getElementById('monto_total');
+
+    function recalcularTotal() {
+        var base = parseFloat(montoBaseInput.value) || 0;
+        var cantidad = Math.max(1, parseInt(cantidadInput.value, 10) || 1);
+        var subtotal = base * cantidad;
+        var valor = parseFloat(descuentoValor.value) || 0;
+        var descontado = 0;
+        if (descuentoTipo.value === 'monto') {
+            descontado = valor;
+        } else if (descuentoTipo.value === 'porcentaje') {
+            descontado = subtotal * (valor / 100);
+        }
+        var total = Math.max(subtotal - descontado, 0);
+        montoTotalPreview.value = '$' + total.toFixed(2) + (cantidad > 1 ? ' (' + cantidad + ' x $' + base.toFixed(2) + ')' : '');
+        montoTotalHidden.value = total.toFixed(2);
+    }
+
+    descuentoTipo.addEventListener('change', function () {
+        descuentoValor.disabled = !descuentoTipo.value;
+        if (!descuentoTipo.value) { descuentoValor.value = 0; }
+        recalcularTotal();
+    });
+    [montoBaseInput, cantidadInput, descuentoValor].forEach(function (el) {
+        el.addEventListener('input', recalcularTotal);
+    });
+    recalcularTotal();
+
+    // ── Periodo que cubre (según cantidad de meses/cobros) ──────────────
+    var periodoSelect = document.getElementById('periodo_inicio');
+    var periodoHidden = document.getElementById('periodo_hidden');
+    var periodoPreview = document.getElementById('periodo_preview');
+
+    function obtenerMesesCubiertos() {
+        var opciones = Array.prototype.map.call(periodoSelect.options, function (o) { return o.value; });
+        var inicio = periodoSelect.selectedIndex;
+        var cantidad = Math.max(1, parseInt(cantidadInput.value, 10) || 1);
+        return opciones.slice(inicio, inicio + cantidad);
+    }
+
+    function recalcularPeriodo() {
+        var cubiertos = obtenerMesesCubiertos();
+        var texto = cubiertos.length > 1
+            ? (cubiertos[0] + ' - ' + cubiertos[cubiertos.length - 1])
+            : (cubiertos[0] || '');
+        periodoHidden.value = texto;
+        periodoPreview.textContent = cubiertos.length > 1 ? 'Cubre: ' + texto : '';
+        actualizarAvisoTraslape();
+    }
+
+    periodoSelect.addEventListener('change', recalcularPeriodo);
+    cantidadInput.addEventListener('input', recalcularPeriodo);
+
+    // ── Historial de pagos del cliente: sugerir periodo, avisar traslapes,
+    //    y mostrar "Ver pagos pasados" sin salir de la pantalla ──────────
+    var historialActual = null;
+    var btnHistorial = document.getElementById('btn-ver-historial');
+    var avisoTraslape = document.getElementById('aviso_traslape');
+    var avisoTraslapeTexto = document.getElementById('aviso_traslape_texto');
+    var confirmarCheck = document.getElementById('confirmar_duplicado_check');
+    var confirmarHidden = document.getElementById('confirmar_duplicado');
+    var modalHistorialEl = document.getElementById('modalHistorial');
+    var modalHistorialTitulo = document.getElementById('modalHistorialTitulo');
+    var modalHistorialContenido = document.getElementById('modalHistorialContenido');
+    var modalHistorial = new bootstrap.Modal(modalHistorialEl);
+
+    function actualizarAvisoTraslape() {
+        if (!historialActual) {
+            avisoTraslape.style.display = 'none';
+            confirmarHidden.value = '0';
+            return;
+        }
+        var pagados = historialActual.periodos_pagados || [];
+        var cubiertos = obtenerMesesCubiertos();
+        var traslape = cubiertos.filter(function (m) { return pagados.indexOf(m) !== -1; });
+        if (traslape.length) {
+            avisoTraslapeTexto.textContent = historialActual.cliente.nombre + ' ' + historialActual.cliente.apellidos +
+                ' ya tiene un pago registrado para: ' + traslape.join(', ') + '.';
+            avisoTraslape.style.display = 'block';
+        } else {
+            avisoTraslape.style.display = 'none';
+            confirmarCheck.checked = false;
+            confirmarHidden.value = '0';
+        }
+    }
+
+    confirmarCheck.addEventListener('change', function () {
+        confirmarHidden.value = confirmarCheck.checked ? '1' : '0';
+    });
+
+    function seleccionarProximoPeriodo() {
+        if (!historialActual) return;
+        var pagados = historialActual.periodos_pagados || [];
+        for (var i = 0; i < periodoSelect.options.length; i++) {
+            if (pagados.indexOf(periodoSelect.options[i].value) === -1) {
+                periodoSelect.selectedIndex = i;
+                break;
+            }
+        }
+        recalcularPeriodo();
+    }
+
+    function cargarHistorial(clienteId, callback) {
+        historialActual = null;
+        fetch('/pagos/historial/' + clienteId)
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                historialActual = data;
+                if (callback) callback(data);
+            })
+            .catch(function () {
+                historialActual = null;
+            });
+    }
+
+    function renderHistorialModal(data) {
+        modalHistorialTitulo.textContent = 'Pagos pasados — ' + data.cliente.nombre + ' ' + data.cliente.apellidos;
+        if (!data.pagos.length) {
+            modalHistorialContenido.innerHTML = '<p class="text-muted mb-0">Este cliente no tiene pagos registrados.</p>';
+            return;
+        }
+        var filas = data.pagos.map(function (p) {
+            return '<tr>' +
+                '<td>' + p.fecha_pago + '</td>' +
+                '<td>' + (p.periodo || '—') + '</td>' +
+                '<td>$' + Number(p.monto).toFixed(2) + '</td>' +
+                '<td>' + p.forma_pago + '</td>' +
+                '<td><a href="/pagos/ticket/' + p.id + '" class="btn btn-sm btn-outline-primary py-0">Ver ticket</a></td>' +
+                '</tr>';
+        }).join('');
+        modalHistorialContenido.innerHTML =
+            '<div class="table-responsive"><table class="table table-sm table-hover mb-0">' +
+            '<thead><tr><th>Fecha</th><th>Periodo</th><th>Monto</th><th>Forma de pago</th><th></th></tr></thead>' +
+            '<tbody>' + filas + '</tbody></table></div>';
+    }
+
+    btnHistorial.addEventListener('click', function () {
+        if (!hidden.value) return;
+        modalHistorialTitulo.textContent = 'Pagos pasados';
+        modalHistorialContenido.innerHTML = '<p class="text-muted mb-0">Cargando...</p>';
+        modalHistorial.show();
+        cargarHistorial(hidden.value, renderHistorialModal);
+    });
+
+    input.closest('form').addEventListener('submit', function (e) {
+        if (avisoTraslape.style.display !== 'none' && confirmarHidden.value !== '1') {
+            e.preventDefault();
+            avisoTraslape.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+    });
+
+    recalcularPeriodo();
+})();
+</script>
+</body>
+</html>

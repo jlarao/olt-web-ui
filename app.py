@@ -1,5 +1,5 @@
 from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify, Response
-from flask_login import LoginManager, login_user, login_required, logout_user, UserMixin
+from flask_login import LoginManager, login_user, login_required, logout_user, UserMixin, current_user
 from werkzeug.security import check_password_hash, generate_password_hash
 import sqlite3,time
 import os
@@ -197,6 +197,115 @@ SERVICE_PPPOE = os.getenv("SERVICE_PPP", "pppoe")
 HOST_MKT = os.getenv("HOST_MKT", "LOCALHOST")
 USERNAME_MKT = os.getenv("USERNAME_MKT", "admin")
 PASSWORD_MKT =  os.getenv("PASSWORD_MKT", "admin")
+PPPOE_PROFILE_SUSPENDIDO = os.getenv("PPPOE_PROFILE_SUSPENDIDO", "suspendido")
+
+# ── Registro de pagos: Google Sheets + impresora de tickets ─────────────
+PAGOS_SPREADSHEET_NAME = os.getenv("PAGOS_SPREADSHEET_NAME", "Ingreso2024")
+GOOGLE_SHEETS_CREDS_FILE = os.getenv("GOOGLE_SHEETS_CREDS_FILE", "react-elearning-e12a6-c869ba1c268d.json")
+PAGOS_SHEET_HEADERS = [
+    'Folio', 'Fecha', 'Cliente', 'Usuario', 'Localidad', 'Plan',
+    'Periodo', 'Monto base', 'Cantidad', 'Descuento', 'Monto', 'Forma de pago',
+    'Registrado por', 'Notas',
+]
+# Hojas del mismo spreadsheet usadas por /sheet y /sheet_ma para alta de ONTs;
+# se excluyen del selector de hojas de pagos para no confundirlas/corromperlas.
+PAGOS_SHEET_RESERVED_NAMES = {'cuentas fibra', 'cuentas fibra ma'}
+
+MESES_ES = [
+    'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+    'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre',
+]
+
+
+def _generar_opciones_periodo(meses_atras=2, meses_adelante=12):
+    """Etiquetas 'Mes AAAA' desde `meses_atras` meses antes de hoy hasta
+    `meses_adelante` meses después, para poblar el select de periodo y
+    permitir calcular el rango cubierto cuando se pagan varios meses."""
+    hoy = datetime.now()
+    opciones = []
+    for offset in range(-meses_atras, meses_adelante + 1):
+        idx = hoy.month - 1 + offset
+        year = hoy.year + idx // 12
+        month = idx % 12
+        opciones.append(f"{MESES_ES[month]} {year}")
+    return opciones
+
+
+def _parsear_periodo(etiqueta):
+    """'Julio 2026' -> (6, 2026) [mes 0-indexado]. None si no se puede parsear
+    (ej. periodos antiguos escritos a mano antes de que esto fuera un select)."""
+    try:
+        mes_str, anio_str = etiqueta.strip().rsplit(' ', 1)
+        return MESES_ES.index(mes_str), int(anio_str)
+    except (ValueError, IndexError):
+        return None
+
+
+def _meses_consecutivos(month_idx, year, cantidad):
+    """Etiquetas 'Mes AAAA' de `cantidad` meses consecutivos empezando en
+    (month_idx, year), 0-indexado (misma convención que _parsear_periodo)."""
+    out = []
+    for i in range(cantidad):
+        idx = month_idx + i
+        y = year + idx // 12
+        m = idx % 12
+        out.append(f"{MESES_ES[m]} {y}")
+    return out
+
+
+def _expandir_periodo(periodo_texto):
+    """Convierte el texto guardado en pagos.periodo (un mes o un rango 'A - B')
+    en la lista de meses individuales que cubre, para detectar traslapes."""
+    if not periodo_texto:
+        return []
+    partes = [p.strip() for p in periodo_texto.split(' - ')]
+    inicio = _parsear_periodo(partes[0])
+    if inicio is None:
+        return [periodo_texto]
+    if len(partes) == 1:
+        return [f"{MESES_ES[inicio[0]]} {inicio[1]}"]
+    fin = _parsear_periodo(partes[-1])
+    if fin is None:
+        return [periodo_texto]
+    total_inicio = inicio[1] * 12 + inicio[0]
+    total_fin = fin[1] * 12 + fin[0]
+    cantidad = max(1, total_fin - total_inicio + 1)
+    return _meses_consecutivos(inicio[0], inicio[1], cantidad)
+
+
+TICKET_EMPRESA_NOMBRE = os.getenv("TICKET_EMPRESA_NOMBRE", "Mi ISP")
+
+# ── Panel de configuración (/configuracion): valores editables desde la web,
+# guardados en configuracion_general. El .env sigue siendo el default hasta
+# que un admin los sobreescriba desde el panel — así no hace falta reiniciar
+# el servidor para cambiar, por ejemplo, el nombre de la empresa del ticket.
+CONFIG_DEFAULTS = {
+    'ticket_empresa_nombre': TICKET_EMPRESA_NOMBRE,
+    'pagos_spreadsheet_name': PAGOS_SPREADSHEET_NAME,
+    'google_sheets_creds_file': GOOGLE_SHEETS_CREDS_FILE,
+    'pppoe_profile_suspendido': PPPOE_PROFILE_SUSPENDIDO,
+}
+CONFIG_LABELS = {
+    'ticket_empresa_nombre': 'Nombre de la empresa (aparece en el ticket)',
+    'pagos_spreadsheet_name': 'Nombre del spreadsheet de Google Sheets (pagos)',
+    'google_sheets_creds_file': 'Archivo de credenciales de Google (JSON)',
+    'pppoe_profile_suspendido': 'Perfil PPP para clientes suspendidos por falta de pago',
+}
+
+
+def get_config(clave):
+    """Valor guardado en configuracion_general para `clave`, o el default de
+    .env (CONFIG_DEFAULTS) si nunca se ha guardado nada desde el panel."""
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute("SELECT valor FROM configuracion_general WHERE clave=?", (clave,))
+    row = c.fetchone()
+    conn.close()
+    if row and row[0] != '':
+        return row[0]
+    return CONFIG_DEFAULTS.get(clave, '')
+
+
 SERVER_ACS = os.getenv("SERVER_ACS", "192.168.1.7:7557")
 PWD_INSERT_OLT = os.getenv("PWD_INSERT_OLT", "")
 STREAMLIT_PORT = int(os.getenv("STREAMLIT_PORT", "8501"))
@@ -268,6 +377,7 @@ DATABASE = "users.db"
 
 def _init_db():
     conn = sqlite3.connect(DATABASE)
+    conn.execute("PRAGMA journal_mode=WAL")
     c = conn.cursor()
     c.execute("""
         CREATE TABLE IF NOT EXISTS users (
@@ -299,6 +409,80 @@ def _init_db():
         )
     """)
     c.execute("CREATE INDEX IF NOT EXISTS idx_api_tokens_token ON api_tokens(token)")
+
+    # ── Fase 1: catálogo de planes y clientes ────────────────────────────
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS planes_servicio (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre         TEXT NOT NULL,
+            precio_mensual REAL NOT NULL,
+            perfil_pppoe   TEXT NOT NULL DEFAULT '',
+            perfil_hotspot TEXT NOT NULL DEFAULT '',
+            activo         INTEGER NOT NULL DEFAULT 1
+        )
+    """)
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS clientes (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre         TEXT NOT NULL,
+            apellidos      TEXT NOT NULL DEFAULT '',
+            direccion      TEXT NOT NULL DEFAULT '',
+            localidad      TEXT NOT NULL DEFAULT '',
+            coordenadas    TEXT NOT NULL DEFAULT '',
+            numero_celular TEXT NOT NULL DEFAULT '',
+            tiene_whatsapp INTEGER NOT NULL DEFAULT 0,
+            user_name      TEXT NOT NULL DEFAULT '',
+            tipo_conexion  TEXT NOT NULL DEFAULT 'pppoe',
+            plan_id        INTEGER,
+            fecha_alta     TEXT NOT NULL,
+            activo         INTEGER NOT NULL DEFAULT 1,
+            FOREIGN KEY (plan_id) REFERENCES planes_servicio(id)
+        )
+    """)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_clientes_plan ON clientes(plan_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_clientes_user_name ON clientes(user_name)")
+
+    # ── Fase 2: registro de pagos ─────────────────────────────────────────
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS pagos (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            cliente_id     INTEGER NOT NULL,
+            fecha_pago     TEXT NOT NULL,
+            monto          REAL NOT NULL,
+            forma_pago     TEXT NOT NULL,
+            periodo        TEXT NOT NULL DEFAULT '',
+            registrado_por TEXT NOT NULL DEFAULT '',
+            notas          TEXT NOT NULL DEFAULT '',
+            hoja_sheet     TEXT NOT NULL DEFAULT '',
+            FOREIGN KEY (cliente_id) REFERENCES clientes(id)
+        )
+    """)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_pagos_cliente ON pagos(cliente_id)")
+    for col, definition in [
+        ('monto_base', "REAL NOT NULL DEFAULT 0"),
+        ('cantidad', "INTEGER NOT NULL DEFAULT 1"),
+        ('descuento_tipo', "TEXT NOT NULL DEFAULT ''"),
+        ('descuento_valor', "REAL NOT NULL DEFAULT 0"),
+    ]:
+        try:
+            c.execute(f"ALTER TABLE pagos ADD COLUMN {col} {definition}")
+        except Exception:
+            pass
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS configuracion_pagos (
+            id          INTEGER PRIMARY KEY CHECK (id = 1),
+            hoja_activa TEXT NOT NULL DEFAULT ''
+        )
+    """)
+    c.execute("INSERT OR IGNORE INTO configuracion_pagos (id, hoja_activa) VALUES (1, '')")
+
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS configuracion_general (
+            clave TEXT PRIMARY KEY,
+            valor TEXT NOT NULL DEFAULT ''
+        )
+    """)
+
     conn.commit()
     conn.close()
 
@@ -1070,6 +1254,95 @@ def call_mkt(name='ps0111',profile='25M',comment='Hector Ontiveros'):
     # Mostrar respuesta
     # import json
     # print(json.dumps(response, indent=4))
+
+
+def set_ppp_profile(user_name, profile, kick=True):
+    """
+    Cambia el perfil de un PPP secret existente en el Mikrotik (ej. para
+    moverlo al perfil de "suspendido por falta de pago" o restaurarlo a su
+    plan normal). Si kick=True, además desconecta la sesión activa para
+    forzar el redial inmediato con el nuevo perfil (cambiar el secret no
+    afecta a una sesión ya conectada).
+
+    Requiere que el perfil PPP y las reglas de walled garden ya existan en
+    el Mikrotik (configuración manual, ver plan de suspensión por mora).
+
+    Devuelve (ok: bool, error: str|None).
+    """
+    from routeros_api import RouterOsApiPool
+    from routeros_api.exceptions import RouterOsApiConnectionError
+
+    try:
+        api_pool = RouterOsApiPool(
+            host=HOST_MKT,
+            username=USERNAME_MKT,
+            password=PASSWORD_MKT,
+            plaintext_login=True
+        )
+        try:
+            api = api_pool.get_api()
+            ppp_secret = api.get_resource('/ppp/secret')
+            secrets = ppp_secret.get(name=user_name)
+            if not secrets:
+                return False, f'Usuario "{user_name}" no existe como PPP secret en el Mikrotik'
+            ppp_secret.set(id=secrets[0]['id'], profile=profile)
+
+            if kick:
+                ppp_active = api.get_resource('/ppp/active')
+                active = ppp_active.get(name=user_name)
+                if active:
+                    ppp_active.remove(id=active[0]['id'])
+            return True, None
+        finally:
+            api_pool.disconnect()
+    except RouterOsApiConnectionError as conn_err:
+        return False, f'Error de conexión con Mikrotik: {conn_err}'
+    except Exception as e:
+        return False, str(e)
+
+
+def _get_gspread_client():
+    import gspread
+    from oauth2client.service_account import ServiceAccountCredentials
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds = ServiceAccountCredentials.from_json_keyfile_name(get_config('google_sheets_creds_file'), scope)
+    return gspread.authorize(creds)
+
+
+def _get_or_create_pagos_worksheet(hoja_nombre):
+    """Abre la hoja del mes (ej. 'julio_2026') dentro del spreadsheet de pagos,
+    o la crea con el encabezado si todavía no existe.
+
+    El encabezado se escribe con update('A1', ...) en vez de append_row():
+    append_row() en una hoja nueva deja que la API de Sheets "adivine" en qué
+    columna empieza la tabla, y en la práctica eso a veces la desalineaba
+    (quedaba arrancando en la columna D). update('A1', ...) fija la columna A
+    sin ambigüedad. También revisa hojas ya existentes creadas antes de tener
+    esta columna (ej. antes de agregar "Localidad") y actualiza su encabezado
+    si no coincide con el actual.
+    """
+    import gspread
+    client = _get_gspread_client()
+    spreadsheet = client.open(get_config('pagos_spreadsheet_name'))
+    try:
+        worksheet = spreadsheet.worksheet(hoja_nombre)
+        encabezado_actual = worksheet.row_values(1)
+        if encabezado_actual != PAGOS_SHEET_HEADERS:
+            worksheet.update(range_name='A1', values=[PAGOS_SHEET_HEADERS])
+    except gspread.exceptions.WorksheetNotFound:
+        worksheet = spreadsheet.add_worksheet(title=hoja_nombre, rows=1000, cols=len(PAGOS_SHEET_HEADERS))
+        worksheet.update(range_name='A1', values=[PAGOS_SHEET_HEADERS])
+    return worksheet
+
+
+def _list_pagos_worksheets():
+    """Nombres de las hojas del spreadsheet de pagos, excluyendo las hojas
+    reservadas para alta de ONTs (cuentas fibra / cuentas fibra ma)."""
+    client = _get_gspread_client()
+    spreadsheet = client.open(get_config('pagos_spreadsheet_name'))
+    nombres = [ws.title for ws in spreadsheet.worksheets()]
+    return [n for n in nombres if n.strip().lower() not in PAGOS_SHEET_RESERVED_NAMES]
+
 
 @app.route("/sheet", methods=["GET"])
 def sheet():
@@ -2574,6 +2847,551 @@ def usuarios_eliminar(user_id):
     conn.close()
     flash('Usuario eliminado')
     return redirect('/usuarios')
+
+
+# ── Configuración general (valores editables que antes solo vivían en .env) ──
+
+@app.route('/configuracion')
+@login_required
+def configuracion():
+    if current_user.role != 'admin':
+        flash('Acceso solo para administradores')
+        return redirect('/dashboard')
+    valores = {clave: get_config(clave) for clave in CONFIG_DEFAULTS}
+    return render_template('configuracion.html', valores=valores, labels=CONFIG_LABELS)
+
+
+@app.route('/configuracion/guardar', methods=['POST'])
+@login_required
+def configuracion_guardar():
+    if current_user.role != 'admin':
+        flash('Acceso solo para administradores')
+        return redirect('/dashboard')
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    for clave in CONFIG_DEFAULTS:
+        valor = request.form.get(clave, '').strip()
+        c.execute(
+            """INSERT INTO configuracion_general (clave, valor) VALUES (?, ?)
+               ON CONFLICT(clave) DO UPDATE SET valor=excluded.valor""",
+            (clave, valor),
+        )
+    conn.commit()
+    conn.close()
+    flash('Configuración actualizada')
+    return redirect('/configuracion')
+
+
+# ── Gestión de planes de servicio ────────────────────────────────────────────
+
+@app.route('/planes')
+@login_required
+def planes():
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("SELECT * FROM planes_servicio ORDER BY activo DESC, nombre")
+    planes_list = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return render_template('planes.html', planes=planes_list)
+
+
+@app.route('/planes/crear', methods=['POST'])
+@login_required
+def planes_crear():
+    nombre = request.form.get('nombre', '').strip()
+    perfil_pppoe = request.form.get('perfil_pppoe', '').strip()
+    perfil_hotspot = request.form.get('perfil_hotspot', '').strip()
+    try:
+        precio_mensual = float(request.form.get('precio_mensual', '').strip())
+    except ValueError:
+        flash('Precio mensual inválido')
+        return redirect('/planes')
+    if not nombre:
+        flash('El nombre del plan es requerido')
+        return redirect('/planes')
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute(
+        "INSERT INTO planes_servicio (nombre, precio_mensual, perfil_pppoe, perfil_hotspot) VALUES (?,?,?,?)",
+        (nombre, precio_mensual, perfil_pppoe, perfil_hotspot),
+    )
+    conn.commit()
+    conn.close()
+    flash(f'Plan "{nombre}" creado correctamente')
+    return redirect('/planes')
+
+
+@app.route('/planes/editar/<int:plan_id>', methods=['GET', 'POST'])
+@login_required
+def planes_editar(plan_id):
+    if request.method == 'GET':
+        conn = sqlite3.connect(DATABASE)
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        c.execute("SELECT * FROM planes_servicio WHERE id=?", (plan_id,))
+        plan = c.fetchone()
+        conn.close()
+        if not plan:
+            flash('Plan no encontrado')
+            return redirect('/planes')
+        return render_template('plan_editar.html', plan=dict(plan))
+
+    nombre = request.form.get('nombre', '').strip()
+    perfil_pppoe = request.form.get('perfil_pppoe', '').strip()
+    perfil_hotspot = request.form.get('perfil_hotspot', '').strip()
+    try:
+        precio_mensual = float(request.form.get('precio_mensual', '').strip())
+    except ValueError:
+        flash('Precio mensual inválido')
+        return redirect(f'/planes/editar/{plan_id}')
+    if not nombre:
+        flash('El nombre del plan es requerido')
+        return redirect(f'/planes/editar/{plan_id}')
+
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute(
+        """UPDATE planes_servicio SET
+           nombre=?, precio_mensual=?, perfil_pppoe=?, perfil_hotspot=?
+           WHERE id=?""",
+        (nombre, precio_mensual, perfil_pppoe, perfil_hotspot, plan_id),
+    )
+    conn.commit()
+    conn.close()
+    flash(f'Plan "{nombre}" actualizado correctamente')
+    return redirect('/planes')
+
+
+@app.route('/planes/toggle/<int:plan_id>', methods=['POST'])
+@login_required
+def planes_toggle(plan_id):
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute("UPDATE planes_servicio SET activo = 1 - activo WHERE id=?", (plan_id,))
+    conn.commit()
+    conn.close()
+    flash('Plan actualizado')
+    return redirect('/planes')
+
+
+# ── Gestión de clientes ──────────────────────────────────────────────────────
+
+@app.route('/clientes')
+@login_required
+def clientes():
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("""
+        SELECT clientes.*, planes_servicio.nombre AS plan_nombre
+        FROM clientes
+        LEFT JOIN planes_servicio ON planes_servicio.id = clientes.plan_id
+        ORDER BY clientes.activo DESC, clientes.nombre
+    """)
+    clientes_list = [dict(r) for r in c.fetchall()]
+    c.execute("SELECT id, nombre FROM planes_servicio WHERE activo = 1 ORDER BY nombre")
+    planes_list = [dict(r) for r in c.fetchall()]
+    conn.close()
+    return render_template('clientes.html', clientes=clientes_list, planes=planes_list)
+
+
+@app.route('/clientes/crear', methods=['POST'])
+@login_required
+def clientes_crear():
+    nombre = request.form.get('nombre', '').strip()
+    apellidos = request.form.get('apellidos', '').strip()
+    direccion = request.form.get('direccion', '').strip()
+    localidad = request.form.get('localidad', '').strip()
+    coordenadas = request.form.get('coordenadas', '').strip()
+    numero_celular = request.form.get('numero_celular', '').strip()
+    tiene_whatsapp = 1 if request.form.get('tiene_whatsapp') else 0
+    user_name = request.form.get('user_name', '').strip()
+    tipo_conexion = request.form.get('tipo_conexion', 'pppoe').strip()
+    plan_id = request.form.get('plan_id') or None
+    if not nombre or not user_name:
+        flash('Nombre y usuario de conexión son requeridos')
+        return redirect('/clientes')
+    if tipo_conexion not in ('pppoe', 'hotspot'):
+        tipo_conexion = 'pppoe'
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute(
+        """INSERT INTO clientes
+           (nombre, apellidos, direccion, localidad, coordenadas, numero_celular,
+            tiene_whatsapp, user_name, tipo_conexion, plan_id, fecha_alta)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+        (nombre, apellidos, direccion, localidad, coordenadas, numero_celular,
+         tiene_whatsapp, user_name, tipo_conexion, plan_id, datetime.now().strftime('%Y-%m-%d')),
+    )
+    conn.commit()
+    conn.close()
+    flash(f'Cliente "{nombre}" registrado correctamente')
+    return redirect('/clientes')
+
+
+@app.route('/clientes/editar/<int:cliente_id>', methods=['GET', 'POST'])
+@login_required
+def clientes_editar(cliente_id):
+    if request.method == 'GET':
+        conn = sqlite3.connect(DATABASE)
+        conn.row_factory = sqlite3.Row
+        c = conn.cursor()
+        c.execute("SELECT * FROM clientes WHERE id=?", (cliente_id,))
+        cliente = c.fetchone()
+        if not cliente:
+            conn.close()
+            flash('Cliente no encontrado')
+            return redirect('/clientes')
+        c.execute("SELECT id, nombre FROM planes_servicio WHERE activo = 1 ORDER BY nombre")
+        planes_list = [dict(r) for r in c.fetchall()]
+        conn.close()
+        return render_template('cliente_editar.html', cliente=dict(cliente), planes=planes_list)
+
+    nombre = request.form.get('nombre', '').strip()
+    apellidos = request.form.get('apellidos', '').strip()
+    direccion = request.form.get('direccion', '').strip()
+    localidad = request.form.get('localidad', '').strip()
+    coordenadas = request.form.get('coordenadas', '').strip()
+    numero_celular = request.form.get('numero_celular', '').strip()
+    tiene_whatsapp = 1 if request.form.get('tiene_whatsapp') else 0
+    user_name = request.form.get('user_name', '').strip()
+    tipo_conexion = request.form.get('tipo_conexion', 'pppoe').strip()
+    plan_id = request.form.get('plan_id') or None
+    if not nombre or not user_name:
+        flash('Nombre y usuario de conexión son requeridos')
+        return redirect('/clientes')
+    if tipo_conexion not in ('pppoe', 'hotspot'):
+        tipo_conexion = 'pppoe'
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute(
+        """UPDATE clientes SET
+           nombre=?, apellidos=?, direccion=?, localidad=?, coordenadas=?, numero_celular=?,
+           tiene_whatsapp=?, user_name=?, tipo_conexion=?, plan_id=?
+           WHERE id=?""",
+        (nombre, apellidos, direccion, localidad, coordenadas, numero_celular,
+         tiene_whatsapp, user_name, tipo_conexion, plan_id, cliente_id),
+    )
+    conn.commit()
+    conn.close()
+    flash('Cliente actualizado')
+    return redirect('/clientes')
+
+
+@app.route('/clientes/toggle/<int:cliente_id>', methods=['POST'])
+@login_required
+def clientes_toggle(cliente_id):
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("SELECT * FROM clientes WHERE id=?", (cliente_id,))
+    cliente = c.fetchone()
+    if not cliente:
+        conn.close()
+        flash('Cliente no encontrado')
+        return redirect('/clientes')
+
+    c.execute("UPDATE clientes SET activo = 1 - activo WHERE id=?", (cliente_id,))
+    conn.commit()
+    nuevo_activo = not cliente['activo']
+
+    if cliente['tipo_conexion'] == 'pppoe' and cliente['user_name']:
+        if nuevo_activo:
+            perfil = None
+            if cliente['plan_id']:
+                c.execute("SELECT perfil_pppoe FROM planes_servicio WHERE id=?", (cliente['plan_id'],))
+                plan_row = c.fetchone()
+                perfil = plan_row['perfil_pppoe'] if plan_row else None
+            if not perfil:
+                flash('Cliente reactivado en el sistema, pero no tiene un plan con perfil PPPoE asignado: '
+                      'actualiza el perfil manualmente en el Mikrotik')
+            else:
+                ok, err = set_ppp_profile(cliente['user_name'], perfil)
+                if ok:
+                    flash(f'Cliente reactivado y perfil PPPoE restaurado a "{perfil}"')
+                else:
+                    logger.error(f"[clientes_toggle] Fallo al reactivar en Mikrotik | user={cliente['user_name']} | {err}")
+                    flash(f'Cliente reactivado en el sistema, pero falló la actualización en Mikrotik: {err}')
+        else:
+            perfil_suspendido = get_config('pppoe_profile_suspendido')
+            ok, err = set_ppp_profile(cliente['user_name'], perfil_suspendido)
+            if ok:
+                flash(f'Cliente dado de baja y movido al perfil "{perfil_suspendido}" en Mikrotik')
+            else:
+                logger.error(f"[clientes_toggle] Fallo al suspender en Mikrotik | user={cliente['user_name']} | {err}")
+                flash(f'Cliente dado de baja en el sistema, pero falló la suspensión en Mikrotik: {err}')
+    else:
+        flash('Cliente actualizado')
+
+    conn.close()
+    return redirect('/clientes')
+
+
+# ── Registro de pagos ────────────────────────────────────────────────────────
+
+@app.route('/pagos')
+@login_required
+def pagos():
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("SELECT hoja_activa FROM configuracion_pagos WHERE id=1")
+    row = c.fetchone()
+    hoja_activa = row['hoja_activa'] if row else ''
+
+    c.execute("""
+        SELECT clientes.id, clientes.nombre, clientes.apellidos, clientes.user_name, clientes.localidad,
+               clientes.plan_id, planes_servicio.nombre AS plan_nombre,
+               planes_servicio.precio_mensual AS plan_precio
+        FROM clientes
+        LEFT JOIN planes_servicio ON planes_servicio.id = clientes.plan_id
+        ORDER BY clientes.nombre
+    """)
+    clientes_list = [dict(r) for r in c.fetchall()]
+
+    c.execute("""
+        SELECT pagos.*, clientes.nombre AS cliente_nombre, clientes.apellidos AS cliente_apellidos
+        FROM pagos
+        LEFT JOIN clientes ON clientes.id = pagos.cliente_id
+        ORDER BY pagos.id DESC LIMIT 50
+    """)
+    pagos_list = [dict(r) for r in c.fetchall()]
+    conn.close()
+
+    hojas_disponibles = []
+    try:
+        hojas_disponibles = _list_pagos_worksheets()
+    except Exception as e:
+        logger.error(f"[pagos] Error listando hojas de Google Sheets: {e}")
+        flash(f'No se pudieron cargar las hojas existentes de Google Sheets: {e}')
+
+    periodo_opciones = _generar_opciones_periodo()
+    periodo_default = _generar_opciones_periodo(0, 0)[0]
+
+    return render_template(
+        'pagos.html', hoja_activa=hoja_activa, clientes=clientes_list,
+        pagos=pagos_list, hojas_disponibles=hojas_disponibles,
+        periodo_opciones=periodo_opciones, periodo_default=periodo_default,
+    )
+
+
+@app.route('/pagos/configurar-hoja', methods=['POST'])
+@login_required
+def pagos_configurar_hoja():
+    crear_nueva = request.form.get('crear_nueva') == '1'
+    hoja = request.form.get('hoja_nueva' if crear_nueva else 'hoja_existente', '').strip()
+
+    if not hoja:
+        flash('Selecciona una hoja existente o marca "Crear nueva" e indica un nombre')
+        return redirect('/pagos')
+
+    try:
+        _get_or_create_pagos_worksheet(hoja)
+    except Exception as e:
+        logger.error(f"[pagos_configurar_hoja] Error creando/abriendo hoja '{hoja}': {e}")
+        flash(f'No se pudo crear/verificar la hoja "{hoja}" en Google Sheets: {e}')
+        return redirect('/pagos')
+
+    conn = sqlite3.connect(DATABASE)
+    c = conn.cursor()
+    c.execute("UPDATE configuracion_pagos SET hoja_activa=? WHERE id=1", (hoja,))
+    conn.commit()
+    conn.close()
+
+    flash(f'Hoja activa configurada: "{hoja}"')
+    return redirect('/pagos')
+
+
+@app.route('/pagos/registrar', methods=['POST'])
+@login_required
+def pagos_registrar():
+    cliente_id = request.form.get('cliente_id', '').strip()
+    monto_base_raw = request.form.get('monto_base', '').strip()
+    cantidad_raw = request.form.get('cantidad', '1').strip()
+    descuento_tipo = request.form.get('descuento_tipo', '').strip()
+    descuento_valor_raw = request.form.get('descuento_valor', '0').strip()
+    forma_pago = request.form.get('forma_pago', '').strip()
+    periodo_inicio = request.form.get('periodo_inicio', '').strip()
+    periodo_fallback = request.form.get('periodo', '').strip()
+    notas = request.form.get('notas', '').strip()
+    confirmar_duplicado = request.form.get('confirmar_duplicado') == '1'
+
+    if not cliente_id or not monto_base_raw or not forma_pago:
+        flash('Cliente, monto y forma de pago son requeridos')
+        return redirect('/pagos')
+    try:
+        monto_base = float(monto_base_raw)
+        cantidad = max(1, int(cantidad_raw or '1'))
+        descuento_valor = float(descuento_valor_raw or '0')
+    except ValueError:
+        flash('Monto, cantidad o descuento inválidos')
+        return redirect('/pagos')
+
+    if descuento_tipo not in ('monto', 'porcentaje'):
+        descuento_tipo = ''
+        descuento_valor = 0.0
+
+    subtotal = monto_base * cantidad
+    if descuento_tipo == 'monto':
+        descuento_aplicado = descuento_valor
+    elif descuento_tipo == 'porcentaje':
+        descuento_aplicado = subtotal * (descuento_valor / 100.0)
+    else:
+        descuento_aplicado = 0.0
+    monto = max(subtotal - descuento_aplicado, 0.0)
+
+    # El periodo "canónico" se recalcula en el servidor a partir del mes de
+    # inicio seleccionado + la cantidad de meses, en vez de confiar en el
+    # texto que arma el JS — así la detección de traslapes es confiable.
+    inicio_parseado = _parsear_periodo(periodo_inicio)
+    if inicio_parseado is not None:
+        periodos_cubiertos = _meses_consecutivos(inicio_parseado[0], inicio_parseado[1], cantidad)
+        periodo = periodos_cubiertos[0] if len(periodos_cubiertos) == 1 else f"{periodos_cubiertos[0]} - {periodos_cubiertos[-1]}"
+    else:
+        periodo = periodo_fallback
+        periodos_cubiertos = _expandir_periodo(periodo_fallback)
+
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("""
+        SELECT clientes.*, planes_servicio.nombre AS plan_nombre
+        FROM clientes LEFT JOIN planes_servicio ON planes_servicio.id = clientes.plan_id
+        WHERE clientes.id=?
+    """, (cliente_id,))
+    cliente = c.fetchone()
+    if not cliente:
+        conn.close()
+        flash('Cliente no encontrado')
+        return redirect('/pagos')
+
+    if periodos_cubiertos and not confirmar_duplicado:
+        c.execute("SELECT periodo FROM pagos WHERE cliente_id=?", (cliente_id,))
+        periodos_pagados = set()
+        for (p,) in c.fetchall():
+            periodos_pagados.update(_expandir_periodo(p))
+        traslape = [p for p in periodos_cubiertos if p in periodos_pagados]
+        if traslape:
+            conn.close()
+            flash(
+                f'{cliente["nombre"]} {cliente["apellidos"]} ya tiene un pago registrado para '
+                f'{", ".join(traslape)}. Si es correcto (ej. un pago adicional o corrección), '
+                f'marca "Registrar de todas formas" y vuelve a enviar el formulario.'
+            )
+            return redirect('/pagos')
+
+    c.execute("SELECT hoja_activa FROM configuracion_pagos WHERE id=1")
+    hoja_row = c.fetchone()
+    hoja_activa = hoja_row['hoja_activa'] if hoja_row else ''
+    if not hoja_activa:
+        conn.close()
+        flash('Configura primero la hoja activa (ej. julio_2026) antes de registrar pagos')
+        return redirect('/pagos')
+
+    fecha_pago = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    registrado_por = getattr(current_user, 'full_name', '') or getattr(current_user, 'username', '')
+
+    c.execute(
+        """INSERT INTO pagos
+           (cliente_id, fecha_pago, monto, monto_base, cantidad, descuento_tipo, descuento_valor,
+            forma_pago, periodo, registrado_por, notas, hoja_sheet)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+        (cliente_id, fecha_pago, monto, monto_base, cantidad, descuento_tipo, descuento_valor,
+         forma_pago, periodo, registrado_por, notas, hoja_activa),
+    )
+    pago_id = c.lastrowid
+    conn.commit()
+    conn.close()
+
+    logger.info(
+        f"[pagos_registrar] Pago #{pago_id} registrado | cliente_id={cliente_id} "
+        f"monto_base={monto_base} cantidad={cantidad} descuento={descuento_tipo}:{descuento_valor} monto={monto}"
+    )
+
+    if descuento_tipo == 'monto':
+        descuento_texto = f"${descuento_valor:.2f}"
+    elif descuento_tipo == 'porcentaje':
+        descuento_texto = f"{descuento_valor:.0f}%"
+    else:
+        descuento_texto = ''
+
+    # Espejo en Google Sheets: si falla, el pago ya quedó guardado localmente
+    try:
+        worksheet = _get_or_create_pagos_worksheet(hoja_activa)
+        worksheet.append_row([
+            pago_id, fecha_pago,
+            f"{cliente['nombre']} {cliente['apellidos']}".strip(),
+            cliente['user_name'], cliente['localidad'] or '',
+            cliente['plan_nombre'] or '', periodo, monto_base, cantidad,
+            descuento_texto, monto, forma_pago, registrado_por, notas,
+        ], table_range='A1')
+    except Exception as e:
+        logger.error(f"[pagos_registrar] Error al espejar pago #{pago_id} en Sheets: {e}")
+        flash(f'Pago #{pago_id} registrado, pero no se pudo espejar en Google Sheets: {e}')
+
+    flash(f'Pago #{pago_id} registrado correctamente')
+    return redirect(f'/pagos/ticket/{pago_id}')
+
+
+@app.route('/pagos/historial/<int:cliente_id>')
+@login_required
+def pagos_historial(cliente_id):
+    """Historial de pagos de un cliente en JSON, usado por el buscador de
+    /pagos para: sugerir el próximo periodo sin pagar, mostrar el modal de
+    'Ver pagos pasados' y advertir de traslapes, todo sin salir de la pantalla."""
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("SELECT id, nombre, apellidos FROM clientes WHERE id=?", (cliente_id,))
+    cliente = c.fetchone()
+    if not cliente:
+        conn.close()
+        return jsonify({'error': 'Cliente no encontrado'}), 404
+
+    c.execute("""
+        SELECT id, fecha_pago, periodo, monto, monto_base, cantidad, forma_pago, notas
+        FROM pagos WHERE cliente_id=? ORDER BY id DESC
+    """, (cliente_id,))
+    pagos_rows = [dict(r) for r in c.fetchall()]
+    conn.close()
+
+    periodos_pagados = set()
+    for p in pagos_rows:
+        periodos_pagados.update(_expandir_periodo(p['periodo']))
+
+    return jsonify({
+        'cliente': {'id': cliente['id'], 'nombre': cliente['nombre'], 'apellidos': cliente['apellidos']},
+        'pagos': pagos_rows,
+        'periodos_pagados': sorted(periodos_pagados),
+    })
+
+
+def _get_pago_con_detalle(pago_id):
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+    c.execute("""
+        SELECT pagos.*, clientes.nombre AS cliente_nombre, clientes.apellidos AS cliente_apellidos,
+               clientes.user_name AS cliente_user_name, planes_servicio.nombre AS plan_nombre
+        FROM pagos
+        LEFT JOIN clientes ON clientes.id = pagos.cliente_id
+        LEFT JOIN planes_servicio ON planes_servicio.id = clientes.plan_id
+        WHERE pagos.id=?
+    """, (pago_id,))
+    pago = c.fetchone()
+    conn.close()
+    return dict(pago) if pago else None
+
+
+@app.route('/pagos/ticket/<int:pago_id>')
+@login_required
+def pagos_ticket(pago_id):
+    pago = _get_pago_con_detalle(pago_id)
+    if not pago:
+        flash('Pago no encontrado')
+        return redirect('/pagos')
+    return render_template('ticket.html', pago=pago, ticket_empresa=get_config('ticket_empresa_nombre'))
 
 
 # ── Auth para app mobile (token Bearer 24 h) ──────────────────────────────────

@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Ticket #{{ pago.id }}</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+    <style>
+        .ticket {
+            max-width: 320px;
+            margin: 0 auto;
+            font-family: 'Courier New', monospace;
+            background: #fff;
+            border: 1px dashed #999;
+            padding: 16px;
+        }
+        .ticket hr { border-top: 1px dashed #999; }
+        .ticket .monto { font-size: 1.6rem; font-weight: bold; }
+
+        /* El ticket se imprime desde el navegador: la impresora térmica debe
+           estar instalada como impresora normal en esta computadora (no en
+           el servidor). @page ajusta el papel a 58mm y en impresión se oculta
+           todo menos el ticket. */
+        @media print {
+            body * { visibility: hidden; }
+            .ticket, .ticket * { visibility: visible; }
+            .ticket {
+                position: absolute;
+                top: 0;
+                left: 0;
+                width: 58mm;
+                max-width: none;
+                margin: 0;
+                padding: 2mm;
+                border: none;
+                font-size: 11px;
+            }
+            .ticket .monto { font-size: 1.3rem; }
+        }
+        @page {
+            size: 58mm auto;
+            margin: 0;
+        }
+    </style>
+</head>
+<body class="bg-light">
+<div class="container mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-3" style="max-width:320px; margin:0 auto;">
+        <a href="/pagos" class="btn btn-sm btn-outline-secondary">← Pagos</a>
+        <button id="btn-imprimir" class="btn btn-sm btn-primary">Imprimir ticket</button>
+    </div>
+
+    <div class="ticket text-center mt-3">
+        <div class="fw-bold">{{ ticket_empresa if ticket_empresa else 'Recibo de pago' }}</div>
+        <div>Recibo de pago</div>
+        <hr>
+        <div class="text-start">
+            <div>Folio: {{ pago.id }}</div>
+            <div>Fecha: {{ pago.fecha_pago }}</div>
+            <div>Cliente: {{ pago.cliente_nombre }} {{ pago.cliente_apellidos }}</div>
+            <div>Usuario: {{ pago.cliente_user_name or '-' }}</div>
+            <div>Plan: {{ pago.plan_nombre or '-' }}</div>
+            {% if pago.periodo %}<div>Periodo: {{ pago.periodo }}</div>{% endif %}
+        </div>
+        <hr>
+        {% if (pago.cantidad or 1) > 1 %}
+            <div>${{ '%.2f'|format(pago.monto_base or 0) }} x {{ pago.cantidad }} = ${{ '%.2f'|format((pago.monto_base or 0) * pago.cantidad) }}</div>
+        {% endif %}
+        {% if pago.descuento_tipo == 'monto' and pago.descuento_valor %}
+            <div>Descuento: -${{ '%.2f'|format(pago.descuento_valor) }}</div>
+        {% elif pago.descuento_tipo == 'porcentaje' and pago.descuento_valor %}
+            <div>Descuento: -{{ '%.0f'|format(pago.descuento_valor) }}%</div>
+        {% endif %}
+        <div class="monto">${{ '%.2f'|format(pago.monto) }}</div>
+        <div>Forma de pago: {{ pago.forma_pago }}</div>
+        {% if pago.notas %}<div>Notas: {{ pago.notas }}</div>{% endif %}
+        <hr>
+        <div>Atendió: {{ pago.registrado_por }}</div>
+    </div>
+</div>
+
+<script>
+document.getElementById('btn-imprimir').addEventListener('click', function () {
+    window.print();
+});
+</script>
+</body>
+</html>

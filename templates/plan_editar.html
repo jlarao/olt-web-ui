@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Editar plan</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+</head>
+<body class="bg-light">
+<div class="container mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="mb-0">Editar plan: {{ plan.nombre }}</h4>
+        <a href="/planes" class="btn btn-sm btn-outline-secondary">← Planes</a>
+    </div>
+
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        {% for msg in messages %}
+          <div class="alert alert-info alert-dismissible fade show py-2" role="alert">
+            {{ msg }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+          </div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <div class="card">
+        <div class="card-body">
+            <form method="POST" action="/planes/editar/{{ plan.id }}">
+                <div class="row g-3">
+                    <div class="col-md-3">
+                        <label class="form-label">Nombre <span class="text-danger">*</span></label>
+                        <input type="text" class="form-control" name="nombre" required value="{{ plan.nombre }}">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Precio mensual <span class="text-danger">*</span></label>
+                        <input type="number" step="0.01" min="0" class="form-control" name="precio_mensual" required
+                               value="{{ plan.precio_mensual }}">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Perfil PPPoE (Mikrotik)</label>
+                        <input type="text" class="form-control" name="perfil_pppoe" value="{{ plan.perfil_pppoe }}">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Perfil Hotspot (Mikrotik)</label>
+                        <input type="text" class="form-control" name="perfil_hotspot" value="{{ plan.perfil_hotspot }}">
+                    </div>
+                    <div class="col-12">
+                        <button type="submit" class="btn btn-primary">Guardar cambios</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
