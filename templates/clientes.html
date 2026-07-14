@@ -26,11 +26,28 @@
       {% endif %}
     {% endwith %}
 
+    <!-- Buscador -->
+    <div class="card mb-3">
+        <div class="card-body py-2">
+            <form method="GET" action="/clientes" class="row g-2 align-items-end">
+                <div class="col-md-8">
+                    <label class="form-label mb-1">Buscar cliente</label>
+                    <input type="text" class="form-control" name="q" value="{{ q }}"
+                           placeholder="Nombre, apellido, localidad, celular o usuario de conexión">
+                </div>
+                <div class="col-md-4">
+                    <button type="submit" class="btn btn-primary">Buscar</button>
+                    {% if q %}<a href="/clientes" class="btn btn-outline-secondary">Limpiar</a>{% endif %}
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- Tabla de clientes -->
     <div class="card mb-4">
         <div class="card-header py-2 d-flex justify-content-between align-items-center">
             <span class="fw-semibold">Clientes registrados</span>
-            <span class="badge bg-secondary">{{ clientes|length }}</span>
+            <span class="badge bg-secondary">{{ total }}</span>
         </div>
         <div class="card-body p-0">
             <table class="table table-sm table-hover mb-0">
@@ -83,11 +100,41 @@
                     </td>
                 </tr>
                 {% else %}
-                <tr><td colspan="9" class="text-center text-muted py-3">No hay clientes registrados</td></tr>
+                <tr><td colspan="9" class="text-center text-muted py-3">
+                    {{ 'Sin resultados para "%s"'|format(q) if q else 'No hay clientes registrados' }}
+                </td></tr>
                 {% endfor %}
                 </tbody>
             </table>
         </div>
+        {% if total_paginas > 1 %}
+        <div class="card-footer d-flex justify-content-between align-items-center py-2">
+            <span class="text-muted small">Página {{ page }} de {{ total_paginas }} ({{ total }} clientes)</span>
+            <nav>
+                <ul class="pagination pagination-sm mb-0">
+                    <li class="page-item {{ 'disabled' if page <= 1 }}">
+                        <a class="page-link" href="{{ url_for('clientes', page=page-1, q=q) }}">«</a>
+                    </li>
+                    {% if paginas_mostradas[0] > 1 %}
+                    <li class="page-item"><a class="page-link" href="{{ url_for('clientes', page=1, q=q) }}">1</a></li>
+                    {% if paginas_mostradas[0] > 2 %}<li class="page-item disabled"><span class="page-link">…</span></li>{% endif %}
+                    {% endif %}
+                    {% for p in paginas_mostradas %}
+                    <li class="page-item {{ 'active' if p == page }}">
+                        <a class="page-link" href="{{ url_for('clientes', page=p, q=q) }}">{{ p }}</a>
+                    </li>
+                    {% endfor %}
+                    {% if paginas_mostradas[-1] < total_paginas %}
+                    {% if paginas_mostradas[-1] < total_paginas - 1 %}<li class="page-item disabled"><span class="page-link">…</span></li>{% endif %}
+                    <li class="page-item"><a class="page-link" href="{{ url_for('clientes', page=total_paginas, q=q) }}">{{ total_paginas }}</a></li>
+                    {% endif %}
+                    <li class="page-item {{ 'disabled' if page >= total_paginas }}">
+                        <a class="page-link" href="{{ url_for('clientes', page=page+1, q=q) }}">»</a>
+                    </li>
+                </ul>
+            </nav>
+        </div>
+        {% endif %}
     </div>
 
     <!-- Formulario nuevo cliente -->

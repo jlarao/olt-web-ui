@@ -2977,23 +2977,60 @@ def planes_toggle(plan_id):
 
 # ── Gestión de clientes ──────────────────────────────────────────────────────
 
+CLIENTES_POR_PAGINA = 30
+
+
 @app.route('/clientes')
 @login_required
 def clientes():
+    q = request.args.get('q', '').strip()
+    try:
+        page = max(1, int(request.args.get('page', '1')))
+    except ValueError:
+        page = 1
+
     conn = sqlite3.connect(DATABASE)
     conn.row_factory = sqlite3.Row
     c = conn.cursor()
-    c.execute("""
+
+    where = ''
+    params = []
+    if q:
+        condiciones = []
+        for termino in q.split():
+            condiciones.append("""(
+                clientes.nombre || ' ' || clientes.apellidos || ' ' || clientes.user_name || ' ' ||
+                clientes.localidad || ' ' || clientes.numero_celular
+            ) LIKE ?""")
+            params.append(f'%{termino}%')
+        where = 'WHERE ' + ' AND '.join(condiciones)
+
+    c.execute(f"SELECT COUNT(*) FROM clientes {where}", params)
+    total = c.fetchone()[0]
+    total_paginas = max(1, -(-total // CLIENTES_POR_PAGINA))
+    page = min(page, total_paginas)
+    offset = (page - 1) * CLIENTES_POR_PAGINA
+
+    c.execute(f"""
         SELECT clientes.*, planes_servicio.nombre AS plan_nombre
         FROM clientes
         LEFT JOIN planes_servicio ON planes_servicio.id = clientes.plan_id
+        {where}
         ORDER BY clientes.activo DESC, clientes.nombre
-    """)
+        LIMIT ? OFFSET ?
+    """, params + [CLIENTES_POR_PAGINA, offset])
     clientes_list = [dict(r) for r in c.fetchall()]
     c.execute("SELECT id, nombre FROM planes_servicio WHERE activo = 1 ORDER BY nombre")
     planes_list = [dict(r) for r in c.fetchall()]
     conn.close()
-    return render_template('clientes.html', clientes=clientes_list, planes=planes_list)
+
+    ventana = 3
+    paginas_mostradas = list(range(max(1, page - ventana), min(total_paginas, page + ventana) + 1))
+
+    return render_template(
+        'clientes.html', clientes=clientes_list, planes=planes_list,
+        q=q, page=page, total_paginas=total_paginas, total=total, paginas_mostradas=paginas_mostradas,
+    )
 
 
 @app.route('/clientes/crear', methods=['POST'])
@@ -3166,13 +3203,18 @@ def pagos():
         logger.error(f"[pagos] Error listando hojas de Google Sheets: {e}")
         flash(f'No se pudieron cargar las hojas existentes de Google Sheets: {e}')
 
-    periodo_opciones = _generar_opciones_periodo()
+    # Rango del select de periodo: 6 meses atrás (para poder ponerse al día
+    # con clientes atrasados) y 2 meses adelante (ej. en julio 2026 se puede
+    # cobrar hasta septiembre 2026, no más, para no acumular pagos muy
+    # anticipados por error de captura).
+    periodo_opciones = _generar_opciones_periodo(6, 2)
     periodo_default = _generar_opciones_periodo(0, 0)[0]
 
     return render_template(
         'pagos.html', hoja_activa=hoja_activa, clientes=clientes_list,
         pagos=pagos_list, hojas_disponibles=hojas_disponibles,
         periodo_opciones=periodo_opciones, periodo_default=periodo_default,
+        meses_es=MESES_ES,
     )
 
 
@@ -3392,6 +3434,101 @@ def pagos_ticket(pago_id):
         flash('Pago no encontrado')
         return redirect('/pagos')
     return render_template('ticket.html', pago=pago, ticket_empresa=get_config('ticket_empresa_nombre'))
+
+
+@app.route('/pagos/editar/<int:pago_id>', methods=['GET', 'POST'])
+@login_required
+def pagos_editar(pago_id):
+    if current_user.role != 'admin':
+        flash('Editar un pago ya registrado es una acción solo para administradores')
+        return redirect('/pagos')
+
+    pago = _get_pago_con_detalle(pago_id)
+    if not pago:
+        flash('Pago no encontrado')
+        return redirect('/pagos')
+
+    if request.method == 'GET':
+        # Rango amplio de meses (2 años atrás) para poder corregir pagos viejos
+        # cuyo periodo haya quedado fuera de las opciones normales de /pagos.
+        periodo_opciones = _generar_opciones_periodo(24, 12)
+        meses_pago_actual = _expandir_periodo(pago['periodo']) if pago['periodo'] else []
+        if meses_pago_actual and meses_pago_actual[0] not in periodo_opciones:
+            periodo_opciones = [meses_pago_actual[0]] + periodo_opciones
+        return render_template('pago_editar.html', pago=pago, periodo_opciones=periodo_opciones)
+
+    monto_base_raw = request.form.get('monto_base', '').strip()
+    cantidad_raw = request.form.get('cantidad', '1').strip()
+    descuento_tipo = request.form.get('descuento_tipo', '').strip()
+    descuento_valor_raw = request.form.get('descuento_valor', '0').strip()
+    forma_pago = request.form.get('forma_pago', '').strip()
+    periodo_inicio = request.form.get('periodo_inicio', '').strip()
+    notas = request.form.get('notas', '').strip()
+    confirmar_duplicado = request.form.get('confirmar_duplicado') == '1'
+
+    if not monto_base_raw or not forma_pago:
+        flash('Monto y forma de pago son requeridos')
+        return redirect(f'/pagos/editar/{pago_id}')
+    try:
+        monto_base = float(monto_base_raw)
+        cantidad = max(1, int(cantidad_raw or '1'))
+        descuento_valor = float(descuento_valor_raw or '0')
+    except ValueError:
+        flash('Monto, cantidad o descuento inválidos')
+        return redirect(f'/pagos/editar/{pago_id}')
+
+    if descuento_tipo not in ('monto', 'porcentaje'):
+        descuento_tipo = ''
+        descuento_valor = 0.0
+
+    subtotal = monto_base * cantidad
+    if descuento_tipo == 'monto':
+        descuento_aplicado = descuento_valor
+    elif descuento_tipo == 'porcentaje':
+        descuento_aplicado = subtotal * (descuento_valor / 100.0)
+    else:
+        descuento_aplicado = 0.0
+    monto = max(subtotal - descuento_aplicado, 0.0)
+
+    inicio_parseado = _parsear_periodo(periodo_inicio)
+    if inicio_parseado is not None:
+        periodos_cubiertos = _meses_consecutivos(inicio_parseado[0], inicio_parseado[1], cantidad)
+        periodo = periodos_cubiertos[0] if len(periodos_cubiertos) == 1 else f"{periodos_cubiertos[0]} - {periodos_cubiertos[-1]}"
+    else:
+        periodo = periodo_inicio
+        periodos_cubiertos = _expandir_periodo(periodo_inicio)
+
+    conn = sqlite3.connect(DATABASE)
+    conn.row_factory = sqlite3.Row
+    c = conn.cursor()
+
+    if periodos_cubiertos and not confirmar_duplicado:
+        c.execute("SELECT periodo FROM pagos WHERE cliente_id=? AND id<>?", (pago['cliente_id'], pago_id))
+        periodos_pagados = set()
+        for (p,) in c.fetchall():
+            periodos_pagados.update(_expandir_periodo(p))
+        traslape = [p for p in periodos_cubiertos if p in periodos_pagados]
+        if traslape:
+            conn.close()
+            flash(
+                f'{pago["cliente_nombre"]} {pago["cliente_apellidos"]} ya tiene otro pago registrado para '
+                f'{", ".join(traslape)}. Si es correcto, marca "Guardar de todas formas" y vuelve a enviar el formulario.'
+            )
+            return redirect(f'/pagos/editar/{pago_id}')
+
+    c.execute(
+        """UPDATE pagos SET
+           monto=?, monto_base=?, cantidad=?, descuento_tipo=?, descuento_valor=?,
+           forma_pago=?, periodo=?, notas=?
+           WHERE id=?""",
+        (monto, monto_base, cantidad, descuento_tipo, descuento_valor, forma_pago, periodo, notas, pago_id),
+    )
+    conn.commit()
+    conn.close()
+
+    logger.info(f"[pagos_editar] Pago #{pago_id} editado por {current_user.username}")
+    flash(f'Pago #{pago_id} actualizado. Nota: el espejo en Google Sheets no se actualiza automáticamente; corrígelo ahí manualmente si aplica.')
+    return redirect('/pagos')
 
 
 # ── Auth para app mobile (token Bearer 24 h) ──────────────────────────────────

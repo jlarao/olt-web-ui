@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Editar pago #{{ pago.id }}</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+</head>
+<body class="bg-light">
+<div class="container mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h4 class="mb-0">Editar pago #{{ pago.id }}</h4>
+        <a href="/pagos" class="btn btn-sm btn-outline-secondary">← Pagos</a>
+    </div>
+
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        {% for msg in messages %}
+          <div class="alert alert-info alert-dismissible fade show py-2" role="alert">
+            {{ msg }}
+            <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+          </div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <div class="card mb-3">
+        <div class="card-body py-2">
+            <div><strong>Cliente:</strong> {{ pago.cliente_nombre }} {{ pago.cliente_apellidos }} ({{ pago.cliente_user_name or '—' }})</div>
+            <div><strong>Plan:</strong> {{ pago.plan_nombre or '—' }}</div>
+            <div><strong>Registrado por:</strong> {{ pago.registrado_por }} — {{ pago.fecha_pago }}</div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header py-2 bg-primary text-white fw-semibold">
+            Datos del pago
+        </div>
+        <div class="card-body">
+            <form method="POST" action="/pagos/editar/{{ pago.id }}">
+                <div class="row g-3">
+                    <div class="col-md-2">
+                        <label class="form-label">Monto del plan <span class="text-danger">*</span></label>
+                        <input type="number" step="0.01" min="0" class="form-control" name="monto_base"
+                               value="{{ pago.monto_base }}" required>
+                    </div>
+                    <div class="col-md-1">
+                        <label class="form-label">Cant.</label>
+                        <input type="number" step="1" min="1" class="form-control" name="cantidad"
+                               value="{{ pago.cantidad or 1 }}">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">Descuento</label>
+                        <select class="form-select" name="descuento_tipo">
+                            <option value="" {{ 'selected' if not pago.descuento_tipo }}>Sin descuento</option>
+                            <option value="monto" {{ 'selected' if pago.descuento_tipo == 'monto' }}>Monto ($)</option>
+                            <option value="porcentaje" {{ 'selected' if pago.descuento_tipo == 'porcentaje' }}>Porcentaje (%)</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">Valor descuento</label>
+                        <input type="number" step="0.01" min="0" class="form-control" name="descuento_valor"
+                               value="{{ pago.descuento_valor or 0 }}">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">Monto actual</label>
+                        <input type="text" class="form-control" value="${{ '%.2f'|format(pago.monto) }}" readonly tabindex="-1">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label">Forma de pago <span class="text-danger">*</span></label>
+                        <select class="form-select" name="forma_pago" required>
+                            {% for opcion in ['Efectivo', 'Transferencia', 'Tarjeta', 'Depósito'] %}
+                            <option value="{{ opcion }}" {{ 'selected' if pago.forma_pago == opcion }}>{{ opcion }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label">Periodo que cubre (mes de inicio)</label>
+                        <select class="form-select" name="periodo_inicio">
+                            {% for p in periodo_opciones %}
+                            <option value="{{ p }}" {{ 'selected' if p == (pago.periodo.split(' - ')[0] if pago.periodo else '') }}>{{ p }}</option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-text">Periodo actual guardado: {{ pago.periodo or '—' }}</div>
+                    </div>
+                    <div class="col-12">
+                        <div class="alert alert-warning py-2 mb-2">
+                            Si el periodo elegido ya tiene otro pago registrado para este cliente, el sistema
+                            lo avisará al guardar y pedirá confirmar antes de sobrescribirlo.
+                        </div>
+                        <div class="form-check">
+                            <input type="checkbox" class="form-check-input" id="confirmar_duplicado_check">
+                            <label class="form-check-label" for="confirmar_duplicado_check">
+                                Guardar de todas formas (ya revisé el traslape de periodo)
+                            </label>
+                        </div>
+                        <input type="hidden" name="confirmar_duplicado" id="confirmar_duplicado" value="0">
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label">Notas</label>
+                        <input type="text" class="form-control" name="notas" value="{{ pago.notas or '' }}">
+                    </div>
+                    <div class="col-12">
+                        <button type="submit" class="btn btn-success">Guardar cambios</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+document.getElementById('confirmar_duplicado_check').addEventListener('change', function () {
+    document.getElementById('confirmar_duplicado').value = this.checked ? '1' : '0';
+});
+</script>
+</body>
+</html>

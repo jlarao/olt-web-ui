@@ -155,6 +155,9 @@
                         <input type="hidden" name="periodo" id="periodo_hidden">
                         <div class="form-text" id="periodo_preview"></div>
                     </div>
+                    <div class="col-12" id="aviso_periodo_no_disponible" style="display:none;">
+                        <div class="alert alert-danger py-2 mb-2" id="aviso_periodo_no_disponible_texto"></div>
+                    </div>
                     <div class="col-12" id="aviso_traslape" style="display:none;">
                         <div class="alert alert-warning py-2 mb-2">
                             <div id="aviso_traslape_texto"></div>
@@ -211,8 +214,11 @@
                     <td>{{ p.forma_pago }}</td>
                     <td>{{ p.periodo or '—' }}</td>
                     <td>{{ p.registrado_por }}</td>
-                    <td class="text-end">
+                    <td class="text-end text-nowrap">
                         <a href="/pagos/ticket/{{ p.id }}" class="btn btn-sm btn-outline-primary py-0">Ver ticket</a>
+                        {% if current_user.role == 'admin' %}
+                        <a href="/pagos/editar/{{ p.id }}" class="btn btn-sm btn-outline-secondary py-0">Editar</a>
+                        {% endif %}
                     </td>
                 </tr>
                 {% else %}
@@ -245,6 +251,8 @@
 <script>
 (function () {
     var clientes = {{ clientes|tojson }};
+    var MESES_ES = {{ meses_es|tojson }};
+    var PERIODO_DEFAULT = {{ periodo_default|tojson }};
 
     function normalizar(s) {
         return (s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
@@ -412,6 +420,8 @@
     var btnHistorial = document.getElementById('btn-ver-historial');
     var avisoTraslape = document.getElementById('aviso_traslape');
     var avisoTraslapeTexto = document.getElementById('aviso_traslape_texto');
+    var avisoPeriodoNoDisponible = document.getElementById('aviso_periodo_no_disponible');
+    var avisoPeriodoNoDisponibleTexto = document.getElementById('aviso_periodo_no_disponible_texto');
     var confirmarCheck = document.getElementById('confirmar_duplicado_check');
     var confirmarHidden = document.getElementById('confirmar_duplicado');
     var modalHistorialEl = document.getElementById('modalHistorial');
@@ -443,14 +453,59 @@
         confirmarHidden.value = confirmarCheck.checked ? '1' : '0';
     });
 
-    function seleccionarProximoPeriodo() {
-        if (!historialActual) return;
-        var pagados = historialActual.periodos_pagados || [];
-        for (var i = 0; i < periodoSelect.options.length; i++) {
-            if (pagados.indexOf(periodoSelect.options[i].value) === -1) {
-                periodoSelect.selectedIndex = i;
-                break;
+    // A partir del historial de pagos del cliente, calcula el mes siguiente
+    // al último periodo pagado (no el primer hueco sin pagar del select:
+    // un cliente puede no tener pago de un mes viejo simplemente porque aún
+    // no era cliente, y eso no debe "atorar" la sugerencia ahí).
+    function obtenerProximoPeriodo() {
+        var pagados = historialActual ? (historialActual.periodos_pagados || []) : [];
+        var maxAnio = null, maxMes = null;
+        pagados.forEach(function (etiqueta) {
+            var partes = etiqueta.split(' ');
+            var idx = MESES_ES.indexOf(partes[0]);
+            var anio = parseInt(partes[1], 10);
+            if (idx === -1 || isNaN(anio)) return;
+            if (maxAnio === null || anio > maxAnio || (anio === maxAnio && idx > maxMes)) {
+                maxAnio = anio;
+                maxMes = idx;
             }
+        });
+        if (maxAnio === null) return null;
+        var idxProximo = maxMes + 1;
+        var anioProximo = maxAnio + Math.floor(idxProximo / 12);
+        return MESES_ES[idxProximo % 12] + ' ' + anioProximo;
+    }
+
+    function seleccionarOpcionPorValor(valor) {
+        for (var i = 0; i < periodoSelect.options.length; i++) {
+            if (periodoSelect.options[i].value === valor) {
+                periodoSelect.selectedIndex = i;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    function seleccionarProximoPeriodo() {
+        avisoPeriodoNoDisponible.style.display = 'none';
+        if (!historialActual) { recalcularPeriodo(); return; }
+
+        var pagados = historialActual.periodos_pagados || [];
+        if (!pagados.length) {
+            // Cliente sin pagos previos: se deja el mes actual (default del select).
+            seleccionarOpcionPorValor(PERIODO_DEFAULT);
+            recalcularPeriodo();
+            return;
+        }
+
+        var proximo = obtenerProximoPeriodo();
+        if (!proximo || !seleccionarOpcionPorValor(proximo)) {
+            avisoPeriodoNoDisponibleTexto.textContent =
+                'A ' + historialActual.cliente.nombre + ' ' + historialActual.cliente.apellidos +
+                ' le toca el periodo "' + (proximo || '?') + '", pero no está disponible en la lista ' +
+                '(puede estar muy atrasado o ya pagado muy por adelantado). Revisa su historial de pagos ' +
+                'con "Ver pagos pasados" antes de registrar.';
+            avisoPeriodoNoDisponible.style.display = 'block';
         }
         recalcularPeriodo();
     }
