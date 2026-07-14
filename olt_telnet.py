@@ -6,6 +6,7 @@ import socket
 import re
 import sqlite3
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import re
 from collections import defaultdict
 import json
@@ -13,6 +14,8 @@ import time
 import traceback
 
 load_dotenv()
+
+MEXICO_TZ = ZoneInfo("America/Mexico_City")
 
 OLT_IP = os.getenv("OLT_HOST")
 OLT_PORT = os.getenv("OLT_PORT")
@@ -401,7 +404,7 @@ def guardar_sqlite(output, tipo):
     
     if output:
         texto = output
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = datetime.now(MEXICO_TZ).strftime("%Y-%m-%d %H:%M:%S")
 
         conn = sqlite3.connect(DATABASE)
         c = conn.cursor()

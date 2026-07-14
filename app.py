@@ -13,6 +13,7 @@ import uuid
 from functools import wraps
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import re
 import ssl as _ssl
 import unicodedata
@@ -221,7 +222,7 @@ def _generar_opciones_periodo(meses_atras=2, meses_adelante=12):
     """Etiquetas 'Mes AAAA' desde `meses_atras` meses antes de hoy hasta
     `meses_adelante` meses después, para poblar el select de periodo y
     permitir calcular el rango cubierto cuando se pagan varios meses."""
-    hoy = datetime.now()
+    hoy = now_mx()
     opciones = []
     for offset in range(-meses_atras, meses_adelante + 1):
         idx = hoy.month - 1 + offset
@@ -373,6 +374,14 @@ login_manager.init_app(app)
 login_manager.login_view = "login"
 
 DATABASE = "users.db"
+
+# El servidor corre en UTC; las fechas que se guardan en BD deben reflejar
+# la hora de Ciudad de México (sin horario de verano desde 2022).
+MEXICO_TZ = ZoneInfo("America/Mexico_City")
+
+
+def now_mx():
+    return datetime.now(MEXICO_TZ)
 
 
 def _init_db():
@@ -3059,7 +3068,7 @@ def clientes_crear():
             tiene_whatsapp, user_name, tipo_conexion, plan_id, fecha_alta)
            VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
         (nombre, apellidos, direccion, localidad, coordenadas, numero_celular,
-         tiene_whatsapp, user_name, tipo_conexion, plan_id, datetime.now().strftime('%Y-%m-%d')),
+         tiene_whatsapp, user_name, tipo_conexion, plan_id, now_mx().strftime('%Y-%m-%d')),
     )
     conn.commit()
     conn.close()
@@ -3331,7 +3340,7 @@ def pagos_registrar():
         flash('Configura primero la hoja activa (ej. julio_2026) antes de registrar pagos')
         return redirect('/pagos')
 
-    fecha_pago = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    fecha_pago = now_mx().strftime('%Y-%m-%d %H:%M:%S')
     registrado_por = getattr(current_user, 'full_name', '') or getattr(current_user, 'username', '')
 
     c.execute(
