@@ -3192,6 +3192,7 @@ def pagos():
                planes_servicio.precio_mensual AS plan_precio
         FROM clientes
         LEFT JOIN planes_servicio ON planes_servicio.id = clientes.plan_id
+        WHERE clientes.activo = 1
         ORDER BY clientes.nombre
     """)
     clientes_list = [dict(r) for r in c.fetchall()]
